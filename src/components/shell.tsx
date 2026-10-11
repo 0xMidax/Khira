@@ -1,35 +1,52 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { Command } from "cmdk";
-import { ArchiveRestore as TriageIcon, Bell, CalendarDays, ChartGantt, Columns3, FolderKanban, GraduationCap, Inbox, LayoutDashboard, LogOut, Megaphone, Menu, Plug, Plus, Search, Settings, Users } from "lucide-react";
+import { ArchiveRestore as TriageIcon, Bell, PanelLeftClose, PanelLeftOpen, FolderKanban, GraduationCap, Inbox, LayoutDashboard, LogOut, Megaphone, Menu, Plug, Plus, Search, Settings, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, Suspense, useContext, useEffect, useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { useTRPC } from "@/trpc/react";
 import { CreateIssueDialog } from "./create-issue";
-import { liveEnabled, useLiveUpdates } from "./live";
+import type { PublicConfig } from "@/lib/public-config";
+import { useLiveUpdates } from "./live";
 import { Tour, tourDone } from "./tour";
+import { IssueModal, useOpenIssue } from "./issue-modal";
 import { Slice } from "./brand";
 import { Avatar, Button, cn, IssueKey, Kbd, TypeIcon } from "./ui";
 
 type Me = { id: string; name: string; image?: string | null; role: string };
-const ShellCtx = createContext<{ me: Me; openCreate: (projectId?: string) => void }>(null!);
+const ShellCtx = createContext<{ me: Me; config: PublicConfig; openCreate: (projectId?: string) => void }>(null!);
 export const useShell = () => useContext(ShellCtx);
 
 const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName));
 
-export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
+export function Shell({ me, config, children }: { me: Me; config: PublicConfig; children: React.ReactNode }) {
   const [create, setCreate] = useState<{ open: boolean; projectId?: string }>({ open: false });
   const [palette, setPalette] = useState(false);
   const [nav, setNav] = useState(false);
+  // Desktop sidebar can shrink to an icon rail; remembered per browser (read after mount to avoid a hydration mismatch).
+  const [mini, setMini] = useState(false);
+  useEffect(() => {
+    try {
+      setMini(localStorage.getItem("khira:rail") === "mini");
+    } catch {}
+  }, []);
+  const toggleMini = () =>
+    setMini((m) => {
+      try {
+        localStorage.setItem("khira:rail", m ? "full" : "mini");
+      } catch {}
+      return !m;
+    });
+  const hide = mini ? "md:hidden" : "";
   const pathname = usePathname();
   const trpc = useTRPC();
   const projects = useQuery(trpc.project.list.queryOptions());
-  const unread = useQuery({ ...trpc.notification.unreadCount.queryOptions(), refetchInterval: liveEnabled ? false : 30_000 });
-  const triage = useQuery({ ...trpc.search.query.queryOptions({ kql: "triage = true", limit: 100 }), refetchInterval: liveEnabled ? false : 60_000 });
-  useLiveUpdates(me.id, projects.data?.map((p) => p.id) ?? []);
+  const unread = useQuery({ ...trpc.notification.unreadCount.queryOptions(), refetchInterval: config.pusher ? false : 30_000 });
+  const triage = useQuery({ ...trpc.search.query.queryOptions({ kql: "triage = true", limit: 100 }), refetchInterval: config.pusher ? false : 60_000 });
+  useLiveUpdates(me.id, projects.data?.map((p) => p.id) ?? [], config.pusher);
 
   // Current project from /p/KEY or /i/KEY-12, so "c" defaults to it.
   const key = /^\/(?:p|i)\/([A-Za-z0-9]+)/.exec(pathname)?.[1]?.toUpperCase();
@@ -48,6 +65,9 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
         } else if (e.key === "/") {
           e.preventDefault();
           setPalette(true);
+        } else if (e.key === "[") {
+          e.preventDefault();
+          toggleMini();
         }
       }
     };
@@ -72,6 +92,8 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
     <Link
       href={href}
       data-tour={`nav-${href}`}
+      title={mini ? label : undefined}
+      aria-label={mini ? label : undefined}
       aria-current={pathname === href ? "page" : undefined}
       className={cn(
         "relative flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-rail-muted transition-colors hover:bg-rail-hover hover:text-rail-ink",
@@ -79,27 +101,37 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
       )}
     >
       {icon}
-      <span className="flex-1 truncate">{label}</span>
-      {extra}
+      <span className={cn("flex-1 truncate", hide)}>{label}</span>
+      {mini && extra ? <span className="absolute top-1 right-1 hidden size-2 rounded-full bg-lime md:block" aria-hidden /> : null}
+      <span className={cn("contents", hide)}>{extra}</span>
     </Link>
   );
 
   return (
-    <ShellCtx.Provider value={{ me, openCreate }}>
+    <ShellCtx.Provider value={{ me, config, openCreate }}>
       <div className="flex min-h-dvh">
         <aside
           className={cn(
-            "fixed inset-y-0 left-0 z-30 flex w-64 flex-col bg-rail p-3 text-rail-ink transition-transform md:sticky md:top-0 md:h-dvh md:translate-x-0",
+            "fixed inset-y-0 left-0 z-30 flex w-64 flex-col bg-rail p-3 text-rail-ink transition-[transform,width] duration-200 md:sticky md:top-0 md:h-dvh md:translate-x-0",
             nav ? "translate-x-0" : "-translate-x-full",
+            mini && "md:w-[60px] md:px-2",
           )}
         >
-          <div className="mb-5 flex items-center gap-2.5 px-2 pt-1.5">
+          <div className={cn("mb-5 flex items-center gap-2.5 px-2 pt-1.5", mini && "md:flex-col md:px-0")}>
             <Slice size={26} />
-            <span className="font-[family-name:var(--font-display)] text-lg font-bold tracking-tight text-white">khira</span>
+            <span className={cn("flex-1 font-[family-name:var(--font-display)] text-lg font-bold tracking-tight text-white", hide)}>khira</span>
+            <button
+              onClick={toggleMini}
+              className="hidden rounded-md p-1 text-rail-muted hover:bg-rail-hover hover:text-rail-ink md:block"
+              aria-label={mini ? "Expand sidebar ([)" : "Collapse sidebar ([)"}
+              title={mini ? "Expand sidebar ([)" : "Collapse sidebar ([)"}
+            >
+              {mini ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+            </button>
           </div>
-          <div className="mb-3 flex gap-1.5">
-            <Button className="flex-1 bg-lime font-semibold text-lime-ink shadow-[inset_0_1px_0_rgb(255_255_255/0.4)] hover:brightness-105" data-tour="new-issue" onClick={() => openCreate()}>
-              <Plus size={16} strokeWidth={2.5} /> New issue
+          <div className={cn("mb-3 flex gap-1.5", mini && "md:flex-col")}>
+            <Button title={mini ? "New issue (C)" : undefined} aria-label="New issue" className={cn("flex-1 bg-lime font-semibold text-lime-ink shadow-[inset_0_1px_0_rgb(255_255_255/0.4)] hover:brightness-105", mini && "md:px-0")} data-tour="new-issue" onClick={() => openCreate()}>
+              <Plus size={16} strokeWidth={2.5} /> <span className={hide}>New issue</span>
             </Button>
             <Button className="border border-rail-line bg-transparent text-rail-muted hover:bg-rail-hover hover:text-rail-ink" aria-label="Search (⌘K)" data-tour="search" onClick={() => setPalette(true)}>
               <Search size={15} />
@@ -119,22 +151,21 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
               "Triage",
               !!triage.data?.length && <span className="rounded-full bg-rail-line px-1.5 text-[11px] font-semibold text-rail-ink">{triage.data.length}</span>,
             )}
-            {link("/board", <Columns3 size={16} />, "Team board")}
             {link("/projects", <FolderKanban size={16} />, "Projects")}
             {link("/dashboards", <LayoutDashboard size={16} />, "Dashboards")}
-            {link("/timeline", <ChartGantt size={16} />, "Timeline")}
-            {link("/calendar", <CalendarDays size={16} />, "Calendar")}
             {link("/standups", <Megaphone size={16} />, "Standups")}
             {me.role === "admin" && link("/settings/integrations", <Plug size={16} />, "Integrations")}
-            {me.role === "admin" && link("/settings/team", <Users size={16} />, "Team & workspace")}
+            {me.role === "admin" && link("/settings/team", <Users size={16} />, "Team")}
             {link("/settings/profile", <Settings size={16} />, "Your settings")}
           </nav>
-          <h2 className="mt-6 mb-1.5 px-2.5 font-sans text-[12px] font-medium tracking-normal text-rail-muted/80">Your projects</h2>
+          <h2 className={cn("mt-6 mb-1.5 px-2.5 font-sans text-[12px] font-medium tracking-normal text-rail-muted/80", hide)}>Your projects</h2>
+          {mini && <div className="mt-4 mb-2 hidden border-t border-rail-line md:block" />}
           <nav className="flex-1 space-y-0.5 overflow-y-auto" data-tour="projects-list">
             {projects.data?.map((p) => (
               <Link
                 key={p.id}
                 href={`/p/${p.key}`}
+                title={mini ? p.name : undefined}
                 className={cn(
                   "flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-rail-hover",
                   key === p.key ? "bg-rail-hover font-medium text-white" : "text-rail-muted hover:text-rail-ink",
@@ -147,22 +178,23 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
                 >
                   {p.key.slice(0, 2)}
                 </span>
-                <span className="flex-1 truncate">{p.name}</span>
-                <span className="text-[11px] tabular-nums text-rail-muted/80">{p.openIssues}</span>
+                <span className={cn("flex-1 truncate", hide)}>{p.name}</span>
+                <span className={cn("text-[11px] tabular-nums text-rail-muted/80", hide)}>{p.openIssues}</span>
               </Link>
             ))}
           </nav>
           <button
             onClick={() => startTour()}
+            title={mini ? "Take the tour" : undefined}
             className="mt-3 flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-rail-muted transition-colors hover:bg-rail-hover hover:text-rail-ink"
           >
             <GraduationCap size={16} />
-            <span className="flex-1">Take the tour</span>
-            {showTourDot && <span className="size-2 animate-pulse rounded-full bg-lime" aria-label="New" />}
+            <span className={cn("flex-1", hide)}>Take the tour</span>
+            {showTourDot && !mini && <span className="size-2 animate-pulse rounded-full bg-lime" aria-label="New" />}
           </button>
-          <div className="mt-2 flex items-center gap-2 border-t border-rail-line px-1 pt-3">
+          <div className={cn("mt-2 flex items-center gap-2 border-t border-rail-line px-1 pt-3", mini && "md:flex-col")}>
             <Avatar name={me.name} image={me.image} />
-            <span className="flex-1 truncate text-[13px] text-rail-ink">{me.name}</span>
+            <span className={cn("flex-1 truncate text-[13px] text-rail-ink", hide)}>{me.name}</span>
             <Button
               variant="ghost"
               className="text-rail-muted hover:bg-rail-hover hover:text-rail-ink"
@@ -179,7 +211,7 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
         </aside>
         {nav && <div className="fixed inset-0 z-20 bg-black/30 md:hidden" onClick={() => setNav(false)} aria-hidden />}
 
-        <div className="min-w-0 flex-1">
+        <div className="app-glow min-w-0 flex-1">
           <div className="sticky top-0 z-10 flex items-center gap-2 bg-rail px-4 py-2 text-rail-ink md:hidden">
             <Button variant="ghost" size="sm" className="text-rail-ink hover:bg-rail-hover" aria-label="Open menu" onClick={() => setNav(true)}>
               <Menu size={18} />
@@ -191,6 +223,9 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
         </div>
       </div>
 
+      <Suspense>
+        <IssueModal />
+      </Suspense>
       <Tour open={tour.open} projectKey={tour.key} onClose={() => setTour({ open: false })} />
       <CreateIssueDialog open={create.open} defaultProjectId={create.projectId} onClose={() => setCreate({ open: false })} />
       <Palette open={palette} onClose={() => setPalette(false)} onCreate={() => openCreate()} onTour={startTour} projects={projects.data ?? []} />
@@ -201,6 +236,7 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
 function Palette({ open, onClose, onCreate, onTour, projects }: { open: boolean; onClose: () => void; onCreate: () => void; onTour: () => void; projects: { key: string; name: string }[] }) {
   const trpc = useTRPC();
   const router = useRouter();
+  const openIssue = useOpenIssue();
   const [q, setQ] = useState("");
   const [debounced, setDebounced] = useState("");
   useEffect(() => {
@@ -237,7 +273,7 @@ function Palette({ open, onClose, onCreate, onTour, projects }: { open: boolean;
         {!!results.data?.length && (
           <Command.Group heading="Issues">
             {results.data.map((r) => (
-              <Item key={r.id} value={r.key} onSelect={() => go(`/i/${r.key}`)}>
+              <Item key={r.id} value={r.key} onSelect={() => (onClose(), openIssue(r.key))}>
                 <TypeIcon type={r.type} />
                 <IssueKey k={r.key} />
                 <span className="truncate">{r.title}</span>

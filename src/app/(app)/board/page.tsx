@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { Board } from "@/components/board";
+import { useOpenIssue } from "@/components/issue-modal";
 import { useShell } from "@/components/shell";
 import { Button, cn, Input, PRIORITY_META, Select, TYPE_META } from "@/components/ui";
 import { filterBoard } from "@/lib/board-filter";
@@ -13,6 +14,7 @@ function TeamBoardInner() {
   const trpc = useTRPC();
   const qc = useQueryClient();
   const router = useRouter();
+  const openIssue = useOpenIssue();
   const pathname = usePathname();
   const params = useSearchParams();
   const { me } = useShell();
@@ -61,7 +63,7 @@ function TeamBoardInner() {
   return (
     <main className="flex h-[calc(100dvh-49px)] flex-col md:h-dvh">
       <header className="px-4 pt-5 pb-3 md:px-6">
-        <h1 className="text-2xl leading-tight">Team board</h1>
+        <h1 className="page-title">Team board</h1>
         <p className="text-[13px] text-muted">Every project on one board. Drag a card to change its status in its own project. Done shows the last 14 days.</p>
       </header>
 
@@ -139,7 +141,7 @@ function TeamBoardInner() {
       <Board
         statuses={columns.data ?? []}
         issues={issues}
-        onOpen={(k) => router.push(`/i/${k}`)}
+        onOpen={openIssue}
         listKey={opts.queryKey}
         moveToColumn={(id, col) => move.mutateAsync({ id, name: columns.data?.find((c) => c.id === col)?.name ?? col })}
       />

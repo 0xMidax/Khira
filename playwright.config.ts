@@ -9,7 +9,7 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
     // Fresh embedded DB per run (with demo seed); `pnpm e2e` builds into .next-e2e first.
-    command: `rm -rf .pglite-e2e .e2e-outbox.jsonl && drizzle-kit migrate && tsx scripts/seed-demo.mts && next start -p ${PORT}`,
+    command: `rm -rf .pglite-e2e .e2e-outbox.jsonl && drizzle-kit migrate && tsx --conditions=react-server scripts/seed-demo.mts && next start -p ${PORT}`,
     url: `http://localhost:${PORT}/sign-in`,
     timeout: 120_000,
     reuseExistingServer: false,

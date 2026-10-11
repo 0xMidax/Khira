@@ -3,6 +3,7 @@ import { and, asc, eq, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { dashboard, type DashboardWidget, issue, project, retroItem, sprint, standup, user, workflowStatus } from "../db/schema";
 import { createIssue, write } from "../services/issues";
+import { type Access, scope } from "../access";
 import { runKql } from "./agile";
 import { authedProcedure, memberProcedure, router } from "../trpc";
 
@@ -34,8 +35,8 @@ export const standupRouter = router({
   }),
 });
 
-async function widgetData(db: typeof import("../db").db, w: DashboardWidget, meId: string) {
-  const rows = await runKql(db, w.kql, meId, 1000);
+async function widgetData(db: typeof import("../db").db, w: DashboardWidget, meId: string, access: Access) {
+  const rows = await runKql(db, w.kql, meId, access, 1000);
   const group = (key: (r: (typeof rows)[number]) => string) => {
     const m = new Map<string, number>();
     for (const r of rows) m.set(key(r), (m.get(key(r)) ?? 0) + 1);
@@ -77,8 +78,9 @@ const DEFAULT_WIDGETS: DashboardWidget[] = [
 export const dashboardRouter = router({
   list: authedProcedure.query(({ ctx }) =>
     ctx.db
-      .select({ id: dashboard.id, name: dashboard.name, shared: dashboard.shared, ownerId: dashboard.ownerId })
+      .select({ id: dashboard.id, name: dashboard.name, shared: dashboard.shared, ownerId: dashboard.ownerId, widgetCount: sql<number>`jsonb_array_length(${dashboard.widgets})`, ownerName: user.name })
       .from(dashboard)
+      .innerJoin(user, eq(user.id, dashboard.ownerId))
       .where(or(eq(dashboard.ownerId, ctx.user.id), eq(dashboard.shared, true)))
       .orderBy(asc(dashboard.name)),
   ),
@@ -94,7 +96,7 @@ export const dashboardRouter = router({
   save: memberProcedure
     .input(z.object({ id, name: z.string().trim().min(1).max(80), shared: z.boolean(), widgets: z.array(widget).max(24) }))
     .mutation(async ({ ctx, input }) => {
-      for (const w of input.widgets) await runKql(ctx.db, w.kql, ctx.user.id, 1); // validate each query
+      for (const w of input.widgets) await runKql(ctx.db, w.kql, ctx.user.id, await ctx.access(), 1); // validate each query
       const [d] = await ctx.db
         .update(dashboard)
         .set({ name: input.name, shared: input.shared, widgets: input.widgets })
@@ -106,12 +108,12 @@ export const dashboardRouter = router({
   delete: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
     await ctx.db.delete(dashboard).where(and(eq(dashboard.id, input.id), eq(dashboard.ownerId, ctx.user.id)));
   }),
-  widget: authedProcedure.input(widget).query(({ ctx, input }) => widgetData(ctx.db, input, ctx.user.id)),
+  widget: authedProcedure.input(widget).query(async ({ ctx, input }) => widgetData(ctx.db, input, ctx.user.id, await ctx.access())),
 
   /** Timeline (epics & dated issues) and calendar (due dates) feed. */
   dated: authedProcedure
     .input(z.object({ projectId: id.optional(), from: day, to: day, epicsOnly: z.boolean().default(false) }))
-    .query(({ ctx, input }) =>
+    .query(async ({ ctx, input }) =>
       ctx.db
         .select({
           id: issue.id,
@@ -133,6 +135,7 @@ export const dashboardRouter = router({
           and(
             sql`${issue.deletedAt} is null and ${project.archivedAt} is null`,
             input.projectId ? eq(issue.projectId, input.projectId) : undefined,
+            scope(await ctx.access()),
             input.epicsOnly ? eq(issue.type, "epic") : undefined,
             sql`coalesce(${issue.dueDate}, ${issue.startDate}) is not null`,
             sql`coalesce(${issue.startDate}, ${issue.dueDate}) <= ${input.to} and coalesce(${issue.dueDate}, ${issue.startDate}) >= ${input.from}`,
@@ -143,24 +146,38 @@ export const dashboardRouter = router({
     ),
 });
 
+/** The project a retro belongs to (through its sprint), checked for the needed access. */
+async function retroProject(ctx: { db: typeof import("../db").db; requireProject: (p: string, n: "read" | "write") => Promise<unknown> }, sprintId: string, need: "read" | "write") {
+  const [s] = await ctx.db.select({ projectId: sprint.projectId }).from(sprint).where(eq(sprint.id, sprintId));
+  if (!s) throw new TRPCError({ code: "NOT_FOUND" });
+  await ctx.requireProject(s.projectId, need);
+  return s.projectId;
+}
+async function sprintOfItem(db: typeof import("../db").db, itemId: string) {
+  const [r] = await db.select({ sprintId: retroItem.sprintId }).from(retroItem).where(eq(retroItem.id, itemId));
+  if (!r) throw new TRPCError({ code: "NOT_FOUND" });
+  return r.sprintId;
+}
+
 export const retroRouter = router({
-  items: authedProcedure.input(z.object({ sprintId: id })).query(({ ctx, input }) =>
-    ctx.db
+  items: authedProcedure.input(z.object({ sprintId: id })).query(async ({ ctx, input }) => {
+    await retroProject(ctx, input.sprintId, "read");
+    return ctx.db
       .select({ item: retroItem, author: user.name, issueKey: sql<string | null>`(select p.key || '-' || i.number from ${issue} i join ${project} p on p.id = i.project_id where i.id = ${retroItem.issueId})` })
       .from(retroItem)
       .innerJoin(user, eq(user.id, retroItem.authorId))
       .where(eq(retroItem.sprintId, input.sprintId))
-      .orderBy(asc(retroItem.createdAt)),
-  ),
+      .orderBy(asc(retroItem.createdAt));
+  }),
   add: memberProcedure
     .input(z.object({ sprintId: id, column: z.enum(["well", "improve", "action"]), body: z.string().trim().min(1).max(1000) }))
     .mutation(async ({ ctx, input }) => {
-      const [s] = await ctx.db.select({ id: sprint.id }).from(sprint).where(eq(sprint.id, input.sprintId));
-      if (!s) throw new TRPCError({ code: "NOT_FOUND" });
+      await retroProject(ctx, input.sprintId, "write");
       const [r] = await ctx.db.insert(retroItem).values({ ...input, authorId: ctx.user.id }).returning();
       return r;
     }),
   vote: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
+    await retroProject(ctx, await sprintOfItem(ctx.db, input.id), "write");
     // Toggle my vote atomically in SQL so concurrent votes don't overwrite each other.
     await ctx.db
       .update(retroItem)
@@ -170,13 +187,15 @@ export const retroRouter = router({
       .where(eq(retroItem.id, input.id));
   }),
   remove: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
+    await retroProject(ctx, await sprintOfItem(ctx.db, input.id), "write");
     const own = ctx.user.role === "admin" ? undefined : eq(retroItem.authorId, ctx.user.id);
     const [r] = await ctx.db.delete(retroItem).where(and(eq(retroItem.id, input.id), own)).returning();
     if (!r) throw new TRPCError({ code: "FORBIDDEN", message: "You can only remove your own notes." });
   }),
   /** Turn an action item into a task in the sprint's project. */
-  toIssue: memberProcedure.input(z.object({ id })).mutation(({ ctx, input }) =>
-    write(ctx.db, async (tx) => {
+  toIssue: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
+    await retroProject(ctx, await sprintOfItem(ctx.db, input.id), "write");
+    return write(ctx.db, async (tx) => {
       const [r] = await tx
         .select({ item: retroItem, projectId: sprint.projectId })
         .from(retroItem)
@@ -187,6 +206,6 @@ export const retroRouter = router({
       const row = await createIssue(tx, ctx.user.id, { projectId: r.projectId, title: r.item.body.slice(0, 255), description: "From the sprint retrospective.", type: "task", priority: "none" });
       await tx.update(retroItem).set({ issueId: row.id }).where(eq(retroItem.id, r.item.id));
       return row;
-    }),
-  ),
+    });
+  }),
 });

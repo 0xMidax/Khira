@@ -4,10 +4,13 @@ import { NextResponse, type NextRequest } from "next/server";
 export function middleware(request: NextRequest) {
   const nonce = btoa(crypto.randomUUID());
   const dev = process.env.NODE_ENV !== "production";
-  const cluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER ?? "mt1";
+  const e = process.env;
+  const cluster = e.PUSHER_CLUSTER ?? e.NEXT_PUBLIC_PUSHER_CLUSTER ?? "mt1";
+  const pusherKey = e.PUSHER_KEY ?? e.NEXT_PUBLIC_PUSHER_KEY;
+  const soketi = e.PUSHER_HOST && `${e.PUSHER_TLS === "false" ? "ws" : "wss"}://${e.PUSHER_HOST}:${e.PUSHER_PORT ?? 6001}`;
   const connect = [
     "'self'",
-    process.env.NEXT_PUBLIC_PUSHER_KEY && `wss://ws-${cluster}.pusher.com https://sockjs-${cluster}.pusher.com`,
+    pusherKey && (soketi || `wss://ws-${cluster}.pusher.com https://sockjs-${cluster}.pusher.com`),
     process.env.NEXT_PUBLIC_SENTRY_DSN && "https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.ingest.de.sentry.io",
     process.env.S3_ENDPOINT && new URL(process.env.S3_ENDPOINT).origin,
   ]

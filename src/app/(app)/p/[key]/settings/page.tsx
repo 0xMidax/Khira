@@ -18,14 +18,14 @@ const PRI = ["urgent", "high", "medium", "low"] as const;
 export default function ProjectSettings({ params }: { params: Promise<{ key: string }> }) {
   const key = use(params).key.toUpperCase();
   const trpc = useTRPC();
-  const { me } = useShell();
   const project = useQuery(trpc.project.byKey.queryOptions({ key }));
-  const [tab, setTab] = useState<"general" | "workflow" | "fields" | "sla" | "integrations" | "automation">("general");
-  if (me.role !== "admin") return <p className="p-8 text-muted">Only admins can change project settings.</p>;
+  const [tab, setTab] = useState<"general" | "members" | "workflow" | "fields" | "sla" | "integrations" | "automation">("general");
   if (!project.data) return <p className="p-8 text-muted">Loading…</p>;
   const p = project.data;
+  if (p.myRole !== "admin") return <p className="p-8 text-muted">Only this project’s admins can change its settings.</p>;
   const tabs = [
     ["general", "General"],
+    ["members", "Members"],
     ["workflow", "Workflow"],
     ["fields", "Custom fields"],
     ["sla", "SLAs"],
@@ -37,7 +37,7 @@ export default function ProjectSettings({ params }: { params: Promise<{ key: str
       <Link href={`/p/${key}`} className="font-mono text-[12px] text-muted hover:text-ink">
         {key}
       </Link>
-      <h1 className="mb-4 text-2xl font-semibold">Project settings</h1>
+      <h1 className="mb-4 page-title">Project settings</h1>
       <div role="tablist" className="mb-6 flex flex-wrap gap-1 border-b border-line">
         {tabs.map(([t, label]) => (
           <button
@@ -52,6 +52,7 @@ export default function ProjectSettings({ params }: { params: Promise<{ key: str
         ))}
       </div>
       {tab === "general" && <General project={p} />}
+      {tab === "members" && <Members projectId={p.id} visibility={p.visibility} />}
       {tab === "workflow" && <WorkflowEditor projectId={p.id} />}
       {tab === "fields" && <FieldsEditor projectId={p.id} />}
       {tab === "sla" && <SlaEditor projectId={p.id} />}
@@ -95,6 +96,96 @@ function General({ project }: { project: { id: string; key: string; name: string
         <Button variant="danger" className="border border-danger/40" onClick={() => confirm(`Archive ${project.key}?`) && archive.mutate({ id: project.id, archived: true })}>
           Archive {project.key}
         </Button>
+      </section>
+    </div>
+  );
+}
+
+function Members({ projectId, visibility }: { projectId: string; visibility: "open" | "private" }) {
+  const trpc = useTRPC();
+  const qc = useQueryClient();
+  const { me } = useShell();
+  const members = useQuery(trpc.project.members.queryOptions({ projectId }));
+  const people = useQuery(trpc.user.list.queryOptions());
+  const refresh = () => (qc.invalidateQueries({ queryKey: trpc.project.pathKey() }), qc.invalidateQueries({ queryKey: trpc.project.members.queryKey({ projectId }) }));
+  const setVis = useMutation(trpc.project.setVisibility.mutationOptions({ onSuccess: () => (refresh(), toast.success("Saved")) }));
+  const setMember = useMutation(trpc.project.setMember.mutationOptions({ onSuccess: refresh }));
+  const remove = useMutation(trpc.project.removeMember.mutationOptions({ onSuccess: refresh }));
+  const ROLE = { admin: "Admin · manages settings and members", member: "Member · reads and writes", viewer: "Viewer · read only" } as const;
+  const notYet = people.data?.filter((u) => !members.data?.some((m) => m.userId === u.id)) ?? [];
+  return (
+    <div className="space-y-6">
+      <section className="space-y-2">
+        <h2 className="font-semibold">Who can see this project</h2>
+        {(
+          [
+            ["open", "Everyone in the workspace", "Members can read and write; guests can read."],
+            ["private", "Only the people listed below", "Workspace admins can always see it. Others won’t know it exists."],
+          ] as const
+        ).map(([v, label, help]) => (
+          <label key={v} className="flex items-start gap-2 rounded-lg border border-line bg-surface p-3">
+            <input type="radio" name="visibility" checked={visibility === v} onChange={() => setVis.mutate({ projectId, visibility: v })} className="mt-1" />
+            <span>
+              <span className="block font-medium">{label}</span>
+              <span className="block text-[13px] text-muted">{help}</span>
+            </span>
+          </label>
+        ))}
+      </section>
+      <section className="space-y-2">
+        <h2 className="font-semibold">Members</h2>
+        <p className="text-[13px] text-muted">
+          {visibility === "open" ? "In an open project, roles here override someone’s workspace role (for example, to make someone a project admin or viewer)." : "Only these people can see this project."}
+        </p>
+        <ul className="divide-y divide-line card">
+          {members.data?.map((m) => (
+            <li key={m.userId} className="flex flex-wrap items-center gap-3 px-3 py-2">
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium">{m.name}</span>
+                <span className="block truncate text-[12px] text-muted">{m.email}</span>
+              </span>
+              <Select value={m.role} onChange={(e) => setMember.mutate({ projectId, userId: m.userId, role: e.target.value as "admin" })} className="w-auto" aria-label={`Role for ${m.name}`}>
+                {Object.entries(ROLE).map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
+              </Select>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label={`Remove ${m.name}`}
+                onClick={() => (m.userId !== me.id || confirm("Remove yourself? You may lose access to this project.")) && remove.mutate({ projectId, userId: m.userId })}
+              >
+                <Trash2 size={14} />
+              </Button>
+            </li>
+          ))}
+        </ul>
+        {notYet.length > 0 && (
+          <form
+            className="flex flex-wrap gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const f = new FormData(e.currentTarget);
+              setMember.mutate({ projectId, userId: String(f.get("user")), role: f.get("role") as "member" });
+            }}
+          >
+            <Select name="user" className="w-56" aria-label="Person to add">
+              {notYet.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </Select>
+            <Select name="role" defaultValue="member" className="w-36" aria-label="Role">
+              <option value="admin">Admin</option>
+              <option value="member">Member</option>
+              <option value="viewer">Viewer</option>
+            </Select>
+            <Button variant="primary">Add</Button>
+          </form>
+        )}
       </section>
     </div>
   );
@@ -206,7 +297,7 @@ function WorkflowEditor({ projectId }: { projectId: string }) {
     <div className="space-y-8">
       <section>
         <h2 className="mb-2 font-semibold">Statuses</h2>
-        <ul className="divide-y divide-line rounded-lg border border-line bg-surface">
+        <ul className="divide-y divide-line card">
           {wf.data.statuses.map(({ status: s, issues }, i) => (
             <li key={s.id} className="flex flex-wrap items-center gap-2 px-3 py-2">
               <span className={cn("size-2.5 rounded-full", STATUS_DOT[s.color])} aria-hidden />
@@ -370,7 +461,7 @@ function FieldsEditor({ projectId }: { projectId: string }) {
   const [type, setType] = useState<"text" | "number" | "select" | "date">("text");
   return (
     <div className="space-y-4">
-      <ul className="divide-y divide-line rounded-lg border border-line bg-surface empty:hidden">
+      <ul className="divide-y divide-line card empty:hidden">
         {fields.data?.map((f) => (
           <li key={f.id} className="flex items-center gap-3 px-3 py-2">
             <span className="font-medium">{f.name}</span>

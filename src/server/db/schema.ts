@@ -32,9 +32,41 @@ export const user = pgTable("user", {
   emailVerified: boolean().notNull().default(false),
   image: text(),
   role: roleEnum().notNull().default("member"),
+  /** Offboarded: can't sign in, sessions and API tokens stop working. Kept for history. */
+  deactivatedAt: timestamp({ withTimezone: true }),
+  twoFactorEnabled: boolean().notNull().default(false),
   createdAt: now(),
   updatedAt: now(),
 });
+
+/** Better Auth two-factor plugin table (TOTP secret + backup codes, both stored encrypted by the plugin). */
+export const twoFactor = pgTable("two_factor", {
+  id: text().primaryKey(),
+  secret: text().notNull(),
+  backupCodes: text().notNull(),
+  userId: text()
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  verified: boolean().notNull().default(true),
+  failedVerificationCount: integer().notNull().default(0),
+  lockedUntil: timestamp({ withTimezone: true }),
+});
+
+/** An invite allows that email to sign up with the given role. Inbox ownership is still proven by email verification. */
+export const invitation = pgTable(
+  "invitation",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    email: text().notNull(),
+    role: roleEnum().notNull().default("member"),
+    invitedBy: text().references(() => user.id, { onDelete: "set null" }),
+    expiresAt: timestamp({ withTimezone: true }).notNull(),
+    acceptedAt: timestamp({ withTimezone: true }),
+    revokedAt: timestamp({ withTimezone: true }),
+    createdAt: now(),
+  },
+  (t) => [index().on(t.email)],
+);
 
 export const session = pgTable("session", {
   id: text().primaryKey(),
@@ -86,9 +118,27 @@ export const project = pgTable("project", {
   leadId: text().references(() => user.id, { onDelete: "set null" }),
   issueCounter: integer().notNull().default(0),
   settings: jsonb().$type<ProjectSettings>().notNull().default({}),
+  /** open = everyone in the workspace (by workspace role); private = only project members (and workspace admins). */
+  visibility: text().$type<"open" | "private">().notNull().default("open"),
   archivedAt: timestamp({ withTimezone: true }),
   createdAt: now(),
 });
+
+export const projectMember = pgTable(
+  "project_member",
+  {
+    projectId: uuid()
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    userId: text()
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** admin = manage the project's settings and members; member = read & write; viewer = read only. */
+    role: text().$type<"admin" | "member" | "viewer">().notNull().default("member"),
+    createdAt: now(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.userId] }), index().on(t.userId)],
+);
 
 export type SlaTargets = Partial<Record<"urgent" | "high" | "medium" | "low", { responseHours: number; resolveHours: number }>>;
 export type ProjectSettings = {

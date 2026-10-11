@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { ProjectIntegrations } from "@/app/(app)/p/[key]/settings/integrations";
 import { DiscordMark, GithubMark, SlackMark } from "@/components/brand";
 import { useShell } from "@/components/shell";
+import { OutgoingWebhooks, ServerFeatures } from "@/components/workspace-extras";
 import { Button, cn, Input, Select } from "@/components/ui";
 import { useTRPC } from "@/trpc/react";
 
@@ -90,7 +91,7 @@ export default function Integrations() {
       },
     }),
   );
-  const testMail = useMutation(trpc.integration.sendTestEmail.mutationOptions({ onSuccess: () => toast.success(`Test email sent to ${me.email}`) }));
+  const testMail = useMutation(trpc.integration.sendTestEmail.mutationOptions({ onSuccess: () => toast.success("Test email sent to your address") }));
   const disconnect = useMutation(trpc.integration.disconnect.mutationOptions({ onSuccess: () => (refresh(), toast("Disconnected")) }));
   const pickedProject = projects.data?.find((p) => p.key === projectKey) ?? projects.data?.[0];
 
@@ -102,7 +103,7 @@ export default function Integrations() {
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8 md:px-8">
-      <h1 className="text-[2rem] leading-tight">Integrations</h1>
+      <h1 className="page-title">Integrations</h1>
       <p className="mb-6 max-w-2xl text-muted">Connect the tools your team already uses. Updates flow to chat, email becomes issues, and GitHub moves work along the board on its own.</p>
       {isLocal && (
         <p className="mb-6 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-[13px]">
@@ -285,6 +286,18 @@ export default function Integrations() {
           )}
         </Card>
       </div>
+
+      <section className="mt-10">
+        <h2 className="text-xl">Outgoing webhooks</h2>
+        <p className="mb-3 text-[13px] text-muted">Send issue events (issue.created, issue.updated, issue.commented…) as signed JSON to your own systems.</p>
+        <OutgoingWebhooks />
+      </section>
+
+      <section className="mt-10">
+        <h2 className="text-xl">Server features</h2>
+        <p className="mb-3 text-[13px] text-muted">Turned on by whoever runs the server, through environment settings.</p>
+        <ServerFeatures />
+      </section>
 
       <section className="mt-10">
         <div className="mb-4 flex flex-wrap items-end gap-3">

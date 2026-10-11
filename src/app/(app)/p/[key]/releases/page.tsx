@@ -26,7 +26,7 @@ export default function Releases({ params }: { params: Promise<{ key: string }> 
         <Link href={`/p/${key}`} className="font-mono text-[12px] text-muted hover:text-ink">
           {key}
         </Link>
-        <h1 className="mb-4 text-2xl font-semibold">Releases</h1>
+        <h1 className="mb-4 page-title">Releases</h1>
         <ul className="mb-4 space-y-1">
           {list.data?.map(({ release: r, total, done }) => (
             <li key={r.id}>
@@ -104,7 +104,7 @@ function ReleaseDetail({ id }: { id: string }) {
           </a>
         )}
       </div>
-      <ul className="divide-y divide-line rounded-lg border border-line bg-surface empty:hidden">
+      <ul className="divide-y divide-line card empty:hidden">
         {rel.issues.map((i) => (
           <li key={i.id}>
             <Link href={`/i/${i.key}`} className="flex items-center gap-2 px-3 py-2 hover:bg-sunken">

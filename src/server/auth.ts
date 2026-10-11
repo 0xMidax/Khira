@@ -3,11 +3,13 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
-import { count } from "drizzle-orm";
+import { twoFactor } from "better-auth/plugins/two-factor";
+import { count, eq } from "drizzle-orm";
 import { headers } from "next/headers";
 import { isSignupAllowed } from "@/lib/signup";
 import { db, schema } from "./db";
 import { sendMail } from "./email";
+import { acceptInvite, findValidInvite } from "./services/invites";
 
 const social = {
   ...(process.env.GOOGLE_CLIENT_ID && {
@@ -26,8 +28,25 @@ const social = {
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: "pg", schema }),
+  // Extra addresses Khira may be opened at (comma-separated). In development, 127.0.0.1 works as well as localhost.
+  trustedOrigins: [
+    ...(process.env.TRUSTED_ORIGINS?.split(",").map((o) => o.trim()).filter(Boolean) ?? []),
+    ...(process.env.NODE_ENV !== "production" ? ["http://localhost:3000", "http://127.0.0.1:3000"] : []),
+  ],
   // Verification proves inbox ownership; without it the ALLOWED_SIGNUPS domain check is spoofable.
-  emailAndPassword: { enabled: true, minPasswordLength: 10, requireEmailVerification: true },
+  emailAndPassword: {
+    enabled: true,
+    minPasswordLength: 10,
+    requireEmailVerification: true,
+    revokeSessionsOnPasswordReset: true,
+    resetPasswordTokenExpiresIn: 60 * 60,
+    sendResetPassword: ({ user, url }) =>
+      sendMail({
+        to: user.email,
+        subject: "Reset your Khira password",
+        text: `Someone (hopefully you) asked to reset your Khira password. Open this link within an hour to choose a new one:\n\n${url}\n\nIf it wasn't you, ignore this email; your password stays the same.`,
+      }),
+  },
   emailVerification: {
     sendOnSignUp: true,
     sendOnSignIn: true,
@@ -39,6 +58,7 @@ export const auth = betterAuth({
   user: {
     additionalFields: {
       role: { type: "string", input: false, defaultValue: "member" },
+      deactivatedAt: { type: "date", input: false, required: false },
     },
   },
   rateLimit: { enabled: true, window: 60, max: 30 },
@@ -47,22 +67,42 @@ export const auth = betterAuth({
       create: {
         before: async (u) => {
           const [{ n }] = await db.select({ n: count() }).from(schema.user);
-          if (!isSignupAllowed(u.email, process.env.ALLOWED_SIGNUPS, n === 0)) {
+          // An in-app invite (with its role) or the ALLOWED_SIGNUPS allowlist; the very first user bootstraps the admin.
+          const invite = await findValidInvite(db, u.email);
+          if (!invite && !isSignupAllowed(u.email, process.env.ALLOWED_SIGNUPS, n === 0)) {
             // Not 403: better-auth masks 403s as a fake "check your email" success. This message leaks no account info.
-            throw new APIError("BAD_REQUEST", { message: "Sign-ups are invite-only for this workspace. Ask an admin to add your email." });
+            throw new APIError("BAD_REQUEST", { message: "Sign-ups are invite-only for this workspace. Ask an admin to invite your email." });
           }
-          return { data: { ...u, role: n === 0 ? "admin" : "member" } };
+          return { data: { ...u, role: n === 0 ? "admin" : (invite?.role ?? "member") } };
+        },
+        after: async (u) => {
+          await acceptInvite(db, u.email);
+        },
+      },
+    },
+    session: {
+      create: {
+        // Deactivated people can't start new sessions (existing ones are deleted when they're deactivated).
+        before: async (session) => {
+          const [u] = await db.select({ deactivatedAt: schema.user.deactivatedAt }).from(schema.user).where(eq(schema.user.id, session.userId));
+          if (u?.deactivatedAt) throw new APIError("FORBIDDEN", { message: "This account has been deactivated. Ask a workspace admin." });
         },
       },
     },
   },
-  plugins: [nextCookies()],
+  plugins: [twoFactor({ issuer: "Khira" }), nextCookies()],
 });
 
 export type SessionUser = typeof auth.$Infer.Session.user;
 
 export async function getSession() {
   return auth.api.getSession({ headers: await headers() });
+}
+
+/** The signed-in person, only if their email is verified and they haven't been deactivated. */
+export async function getMember() {
+  const u = (await getSession())?.user;
+  return u?.emailVerified && !u.deactivatedAt ? u : null;
 }
 
 export const socialProviders = Object.keys(social);

@@ -1,0 +1,81 @@
+# Self-hosted Khira: app + Postgres + Soketi (live updates) + scheduler.
+# 1. cp .env.example .env  and fill the REQUIRED block (see docs/self-hosting.md)
+# 2. docker compose up -d
+# 3. open http://localhost:3000 (put a TLS proxy such as Caddy in front for real use)
+
+x-db-url: &db-url postgres://khira:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/khira
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: khira
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: khira
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U khira -d khira"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build: { context: ., target: migrate }
+    environment:
+      DATABASE_URL: *db-url
+    depends_on:
+      db: { condition: service_healthy }
+    restart: "no"
+
+  app:
+    build: { context: ., target: app }
+    image: khira:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: *db-url
+      LOCAL_UPLOAD_DIR: /data/uploads
+      # Live updates through the bundled Soketi (Pusher-compatible, self-hosted).
+      PUSHER_APP_ID: khira
+      PUSHER_KEY: ${PUSHER_KEY:-khira-key}
+      PUSHER_SECRET: ${PUSHER_SECRET:?set PUSHER_SECRET in .env}
+      PUSHER_HOST: ${PUSHER_PUBLIC_HOST:-localhost}
+      PUSHER_PORT: ${PUSHER_PUBLIC_PORT:-6001}
+      PUSHER_TLS: ${PUSHER_PUBLIC_TLS:-false}
+      PUSHER_INTERNAL_HOST: soketi
+      PUSHER_INTERNAL_PORT: "6001"
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+  soketi:
+    image: quay.io/soketi/soketi:1.6-16-alpine
+    restart: unless-stopped
+    environment:
+      SOKETI_DEFAULT_APP_ID: khira
+      SOKETI_DEFAULT_APP_KEY: ${PUSHER_KEY:-khira-key}
+      SOKETI_DEFAULT_APP_SECRET: ${PUSHER_SECRET}
+    ports:
+      - "${PUSHER_PUBLIC_PORT:-6001}:6001"
+
+  scheduler:
+    image: alpine:3.20
+    restart: unless-stopped
+    environment:
+      CRON_SECRET: ${CRON_SECRET:?set CRON_SECRET in .env}
+      APP_URL: http://app:3000
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl >/dev/null && exec /scheduler.sh"]
+    volumes:
+      - ./deploy/scheduler.sh:/scheduler.sh:ro
+    depends_on:
+      - app
+
+volumes:
+  db-data:
+  uploads:

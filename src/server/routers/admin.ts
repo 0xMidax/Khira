@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { encrypt, randomToken, sha256 } from "@/lib/crypto";
+import { publicConfig } from "@/lib/public-config";
 import { nextRun } from "@/lib/recurrence";
 import { apiToken, automationRule, automationRun, issueTemplate, outgoingWebhook, projectChannel, recurringIssue } from "../db/schema";
 import { postDiscord } from "../integrations/discord";
@@ -55,10 +56,10 @@ export const integrationRouter = router({
       inboundEmail: !!email?.inboundSecret,
       inboundDomain: email?.inboundDomain ?? null,
       ai: !!process.env.ANTHROPIC_API_KEY,
-      realtime: !!process.env.NEXT_PUBLIC_PUSHER_KEY,
-      push: !!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
+      realtime: !!publicConfig().pusher,
+      push: !!publicConfig().vapidPublicKey,
       storage: !!process.env.S3_BUCKET,
-      email: !!email?.resendKey,
+      email: !!email?.resendKey || !!process.env.SMTP_URL,
     };
   }),
 
@@ -228,11 +229,17 @@ export const integrationRouter = router({
   }),
 });
 
+async function projectOf<T extends { projectId: string }>(rows: T[]) {
+  if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND" });
+  return rows[0];
+}
+
 export const automationRouter = router({
-  rules: authedProcedure.input(z.object({ projectId: id })).query(({ ctx, input }) =>
-    ctx.db.select().from(automationRule).where(eq(automationRule.projectId, input.projectId)).orderBy(desc(automationRule.createdAt)),
-  ),
-  saveRule: adminProcedure
+  rules: authedProcedure.input(z.object({ projectId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "read");
+    return ctx.db.select().from(automationRule).where(eq(automationRule.projectId, input.projectId)).orderBy(desc(automationRule.createdAt));
+  }),
+  saveRule: memberProcedure
     .input(
       z.object({
         projectId: id,
@@ -245,6 +252,7 @@ export const automationRouter = router({
       }),
     )
     .mutation(async ({ ctx, input: { id: rid, ...r } }) => {
+      await ctx.requireProject(r.projectId, "admin");
       if (rid) {
         const [row] = await ctx.db
           .update(automationRule)
@@ -256,15 +264,20 @@ export const automationRouter = router({
       const [row] = await ctx.db.insert(automationRule).values({ ...r, createdBy: ctx.user.id }).returning();
       return row;
     }),
-  deleteRule: adminProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
+  deleteRule: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
+    const rule = await projectOf(await ctx.db.select({ projectId: automationRule.projectId }).from(automationRule).where(eq(automationRule.id, input.id)));
+    await ctx.requireProject(rule.projectId, "admin");
     await ctx.db.delete(automationRule).where(eq(automationRule.id, input.id));
   }),
-  runs: authedProcedure.input(z.object({ ruleId: id })).query(({ ctx, input }) =>
-    ctx.db.select().from(automationRun).where(eq(automationRun.ruleId, input.ruleId)).orderBy(desc(automationRun.createdAt)).limit(20),
-  ),
+  runs: authedProcedure.input(z.object({ ruleId: id })).query(async ({ ctx, input }) => {
+    const rule = await projectOf(await ctx.db.select({ projectId: automationRule.projectId }).from(automationRule).where(eq(automationRule.id, input.ruleId)));
+    await ctx.requireProject(rule.projectId, "read");
+    return ctx.db.select().from(automationRun).where(eq(automationRun.ruleId, input.ruleId)).orderBy(desc(automationRun.createdAt)).limit(20);
+  }),
 
   // ---- templates & recurring issues ----
   templates: authedProcedure.input(z.object({ projectId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "read");
     const ts = await ctx.db.select().from(issueTemplate).where(eq(issueTemplate.projectId, input.projectId)).orderBy(issueTemplate.name);
     const rec = ts.length ? await ctx.db.select().from(recurringIssue) : [];
     return ts.map((t) => ({ ...t, recurring: rec.find((r) => r.templateId === t.id) ?? null }));
@@ -272,6 +285,7 @@ export const automationRouter = router({
   saveTemplate: memberProcedure
     .input(z.object({ projectId: id, id: id.optional(), name: z.string().trim().min(1).max(80), fields: templateFields }))
     .mutation(async ({ ctx, input }) => {
+      await ctx.requireProject(input.projectId, "write");
       if (input.id) {
         const [t] = await ctx.db
           .update(issueTemplate)
@@ -284,14 +298,18 @@ export const automationRouter = router({
       return t;
     }),
   deleteTemplate: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
+    const t = await projectOf(await ctx.db.select({ projectId: issueTemplate.projectId }).from(issueTemplate).where(eq(issueTemplate.id, input.id)));
+    await ctx.requireProject(t.projectId, "write");
     await ctx.db.delete(issueTemplate).where(eq(issueTemplate.id, input.id));
   }),
   useTemplate: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
-    const [t] = await ctx.db.select().from(issueTemplate).where(eq(issueTemplate.id, input.id));
-    if (!t) throw new TRPCError({ code: "NOT_FOUND" });
+    const t = await projectOf(await ctx.db.select().from(issueTemplate).where(eq(issueTemplate.id, input.id)));
+    await ctx.requireProject(t.projectId, "write");
     return write(ctx.db, (tx) => createFromTemplate(tx, ctx.user.id, t, "user"));
   }),
   setRecurring: memberProcedure.input(z.object({ templateId: id, rule: recurrence.nullable() })).mutation(async ({ ctx, input }) => {
+    const t = await projectOf(await ctx.db.select({ projectId: issueTemplate.projectId }).from(issueTemplate).where(eq(issueTemplate.id, input.templateId)));
+    await ctx.requireProject(t.projectId, "write");
     await ctx.db.delete(recurringIssue).where(eq(recurringIssue.templateId, input.templateId));
     if (!input.rule) return null;
     const [r] = await ctx.db

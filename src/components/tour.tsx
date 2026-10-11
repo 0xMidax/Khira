@@ -1,8 +1,8 @@
 "use client";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { isOnScreen, placePopover, type Rect } from "@/lib/tour";
-import { Button, Kbd } from "./ui";
+import { Button, cn, Kbd } from "./ui";
 
 type Step = { title: string; body: React.ReactNode; target?: string; path?: string };
 
@@ -47,11 +47,6 @@ export function buildSteps(projectKey?: string): Step[] {
       body: "Your open issues, grouped into overdue, in progress and up next. Hover an issue and press ▶ to start a focus timer; the time is logged when you stop.",
     },
     {
-      target: '[data-tour="nav-/board"]',
-      title: "Team board",
-      body: "Every project’s work on one Kanban board, by To do, In progress and Done. Filter to just your issues or a few projects, and drag cards across columns.",
-    },
-    {
       target: '[data-tour="nav-/inbox"]',
       title: "Notifications",
       body: "Mentions, assignments and changes to issues you watch land here (and by email or push, if you turn those on in Your settings).",
@@ -73,8 +68,8 @@ export function buildSteps(projectKey?: string): Step[] {
           {
             path: `/p/${p}`,
             target: '[data-tour="views"]',
-            title: "Three ways to see a project",
-            body: "Board shows work by status. Backlog is for planning sprints. List is a compact table you can sort and scan.",
+            title: "Everything about a project, in tabs",
+            body: "Summary shows its health at a glance. Timeline and Calendar plan by dates. Backlog is for planning sprints, Board shows work by status, and List is a compact table you can sort and scan.",
           },
           {
             path: `/p/${p}`,
@@ -108,8 +103,8 @@ export function buildSteps(projectKey?: string): Step[] {
       : []),
     {
       target: '[data-tour="nav-/dashboards"]',
-      title: "Dashboards, timeline, calendar and standups",
-      body: "Build team dashboards from saved queries, plan epics on the timeline, see due dates on the calendar, and read daily standups drafted from everyone’s activity.",
+      title: "Dashboards and standups",
+      body: "Build team dashboards from saved queries, and read daily standups drafted from everyone’s activity. Each project’s Timeline and Calendar tabs plan work by date.",
     },
     {
       target: '[data-tour="nav-/settings/profile"]',
@@ -128,15 +123,22 @@ export function buildSteps(projectKey?: string): Step[] {
   ];
 }
 
-const SIZE = { width: 340, height: 230 };
+const WIDTH = 340;
+const round = (r: DOMRect): Rect => ({ top: Math.round(r.top), left: Math.round(r.left), width: Math.round(r.width), height: Math.round(r.height) });
+const same = (a: Rect | null, b: Rect | null) => a === b || (!!a && !!b && a.top === b.top && a.left === b.left && a.width === b.width && a.height === b.height);
+const atPath = (want: string) => {
+  const [path, query = ""] = want.split("?");
+  return location.pathname === path && location.search.replace(/^\?/, "") === query;
+};
 
 export function Tour({ open, onClose, projectKey }: { open: boolean; onClose: () => void; projectKey?: string }) {
   const router = useRouter();
-  const pathname = usePathname();
   const steps = buildSteps(projectKey);
   const [i, setI] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);
+  const [popHeight, setPopHeight] = useState(230);
   const nextRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
   const step = steps[Math.min(i, steps.length - 1)];
 
   const finish = useCallback(() => {
@@ -148,53 +150,46 @@ export function Tour({ open, onClose, projectKey }: { open: boolean; onClose: ()
     onClose();
   }, [onClose]);
 
-  // Go to the step's page, then wait (up to ~4s) for its target to render.
+  // Per step: go to its page, then follow its target every frame. The spotlight stays on the previous
+  // target until the new one appears and then glides over (no blackout/jump between steps).
   useEffect(() => {
     if (!open) return;
-    if (step.path) {
-      const [path, query] = step.path.split("?");
-      const here = typeof window !== "undefined" ? window.location.search.replace(/^\?/, "") : "";
-      if (path !== pathname || (query ?? "") !== here) router.push(step.path);
-    }
-    setRect(null);
-    if (!step.target) return;
-    let tries = 0;
-    const t = setInterval(() => {
-      const el = document.querySelector(step.target!);
-      if (el || ++tries > 40) {
-        clearInterval(t);
-        if (el) {
+    if (step.path && !atPath(step.path)) router.push(step.path);
+    const started = performance.now();
+    let scrolled = false;
+    let frame = 0;
+    const tick = () => {
+      const onPage = !step.path || atPath(step.path);
+      const el = onPage && step.target ? document.querySelector(step.target) : null;
+      if (el) {
+        if (!scrolled) {
           el.scrollIntoView({ block: "nearest", inline: "nearest" });
-          const r = el.getBoundingClientRect();
-          setRect(isOnScreen(r, { width: innerWidth, height: innerHeight }) ? { top: r.top, left: r.left, width: r.width, height: r.height } : null);
+          scrolled = true;
         }
+        const r = round(el.getBoundingClientRect());
+        const next = isOnScreen(r, { width: innerWidth, height: innerHeight }) ? r : null;
+        setRect((prev) => (same(prev, next) ? prev : next));
+      } else if (!step.target || (onPage && performance.now() - started > 3000)) {
+        setRect(null); // no target (or it never showed up): centre the card
       }
-    }, 100);
-    return () => clearInterval(t);
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run per step, not on every navigation tick
   }, [open, i]);
 
-  // Keep the spotlight glued to its target on resize/scroll.
+  // Place the card by its real height, not a guess.
   useEffect(() => {
-    if (!open || !step.target) return;
-    const update = () => {
-      const el = document.querySelector(step.target!);
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      setRect(isOnScreen(r, { width: innerWidth, height: innerHeight }) ? { top: r.top, left: r.left, width: r.width, height: r.height } : null);
-    };
-    addEventListener("resize", update);
-    addEventListener("scroll", update, true);
-    return () => {
-      removeEventListener("resize", update);
-      removeEventListener("scroll", update, true);
-    };
-  }, [open, step.target]);
+    if (!open || !popRef.current) return;
+    const ro = new ResizeObserver(([e]) => setPopHeight(Math.round(e.borderBoxSize[0]?.blockSize ?? e.contentRect.height)));
+    ro.observe(popRef.current);
+    return () => ro.disconnect();
+  }, [open]);
 
   useLayoutEffect(() => {
-    if (open) nextRef.current?.focus();
-  }, [open, i, rect]);
-
+    if (open) nextRef.current?.focus({ preventScroll: true });
+  }, [open, i]);
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -211,36 +206,36 @@ export function Tour({ open, onClose, projectKey }: { open: boolean; onClose: ()
 
   if (!open) return null;
   const last = i === steps.length - 1;
-  const vp = { width: typeof window === "undefined" ? 1024 : innerWidth, height: typeof window === "undefined" ? 768 : innerHeight };
-  const size = { width: Math.min(SIZE.width, vp.width - 32), height: SIZE.height };
-  const pos = rect ? placePopover(rect, vp, size) : null;
+  const vp = { width: innerWidth, height: innerHeight };
+  const size = { width: Math.min(WIDTH, vp.width - 32), height: popHeight };
+  const pos = rect ? placePopover(rect, vp, size) : { left: (vp.width - size.width) / 2, top: Math.max(16, (vp.height - size.height) / 2) };
+  // With no target the spotlight shrinks to a point in the middle; its shadow still dims the page.
+  const spot = rect ? { top: rect.top - 6, left: rect.left - 6, width: rect.width + 12, height: rect.height + 12 } : { top: vp.height / 2, left: vp.width / 2, width: 0, height: 0 };
 
   return (
     <div className="fixed inset-0 z-[60]" aria-live="polite">
-      {/* Spotlight: one box with a huge shadow dims everything except the target. */}
-      {rect ? (
-        <div
-          className="pointer-events-none fixed rounded-lg ring-2 ring-accent transition-all duration-200"
-          style={{ top: rect.top - 6, left: rect.left - 6, width: rect.width + 12, height: rect.height + 12, boxShadow: "0 0 0 9999px rgba(0,0,0,0.5)" }}
-          aria-hidden
-        />
-      ) : (
-        <div className="fixed inset-0 bg-black/50" aria-hidden />
-      )}
       <div
+        className={cn("pointer-events-none fixed rounded-xl transition-all duration-300 ease-out", rect && "ring-2 ring-lime")}
+        style={{ ...spot, boxShadow: "0 0 0 9999px rgba(8,17,12,0.55)" }}
+        aria-hidden
+      />
+      <div
+        ref={popRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="tour-title"
-        className="fixed rounded-xl border border-line bg-surface p-4 text-ink shadow-2xl"
-        style={pos ? { width: size.width, left: pos.left, top: pos.top } : { width: size.width, left: "50%", top: "50%", transform: "translate(-50%, -50%)" }}
+        className="fixed rounded-2xl border border-line bg-surface p-4 text-ink shadow-2xl transition-[top,left] duration-300 ease-out"
+        style={{ width: size.width, left: pos.left, top: pos.top }}
       >
         <div className="mb-1 text-[12px] text-muted">
           Step {i + 1} of {steps.length}
         </div>
-        <h2 id="tour-title" className="mb-1.5 text-base font-semibold">
-          {step.title}
-        </h2>
-        <div className="mb-4 text-[13px] leading-relaxed text-ink/90">{step.body}</div>
+        <div key={i} className="animate-tour-in">
+          <h2 id="tour-title" className="mb-1.5 text-base font-semibold">
+            {step.title}
+          </h2>
+          <div className="mb-4 text-[13px] leading-relaxed text-ink/90">{step.body}</div>
+        </div>
         <div className="mb-3 h-1 overflow-hidden rounded-full bg-sunken" aria-hidden>
           <div className="h-full bg-accent transition-all" style={{ width: `${((i + 1) / steps.length) * 100}%` }} />
         </div>

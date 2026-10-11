@@ -5,6 +5,7 @@ import { z } from "zod";
 import { issueCreate, issueKey, issueListFilter, issueMove, issueUpdate } from "@/lib/validators";
 import { activity, issue, issueLabel, label, project, user, workflowStatus } from "../db/schema";
 import { createIssue, moveIssue, setDeleted, updateIssue, write } from "../services/issues";
+import { scope } from "../access";
 import { authedProcedure, memberProcedure, router } from "../trpc";
 
 const assignee = alias(user, "assignee");
@@ -69,6 +70,7 @@ export function mergeColumns(rows: { name: string; category: "todo" | "in_progre
 
 export const issueRouter = router({
   list: authedProcedure.input(issueListFilter).query(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "read");
     const where: (SQL | undefined)[] = [eq(issue.projectId, input.projectId)];
     if (!input.includeDeleted) where.push(isNull(issue.deletedAt));
     if (input.assigneeId === null) where.push(isNull(issue.assigneeId));
@@ -98,7 +100,9 @@ export const issueRouter = router({
       .innerJoin(project, eq(project.id, issue.projectId))
       .innerJoin(workflowStatus, eq(workflowStatus.id, issue.statusId))
       .leftJoin(assignee, eq(assignee.id, issue.assigneeId))
-      .where(and(eq(issue.assigneeId, ctx.user.id), isNull(issue.deletedAt), sql`${workflowStatus.category} <> 'done'`, isNull(project.archivedAt)))
+      .where(
+        and(eq(issue.assigneeId, ctx.user.id), isNull(issue.deletedAt), sql`${workflowStatus.category} <> 'done'`, isNull(project.archivedAt), scope(await ctx.access())),
+      )
       .orderBy(sql`case ${issue.priority} when 'urgent' then 0 when 'high' then 1 when 'medium' then 2 when 'low' then 3 else 4 end`, asc(issue.dueDate))
       .limit(200);
     return withLabels(ctx.db, rows);
@@ -130,6 +134,7 @@ export const issueRouter = router({
             or(isNull(issue.resolvedAt), gte(issue.resolvedAt, since)),
             input.mine ? eq(issue.assigneeId, ctx.user.id) : undefined,
             input.projectIds?.length ? inArray(issue.projectId, input.projectIds) : undefined,
+            scope(await ctx.access()),
           ),
         )
         // No shared rank across projects: urgent first, then most recently touched.
@@ -144,7 +149,7 @@ export const issueRouter = router({
       .select({ name: workflowStatus.name, category: workflowStatus.category, color: workflowStatus.color, position: workflowStatus.position })
       .from(workflowStatus)
       .innerJoin(project, eq(project.id, workflowStatus.projectId))
-      .where(isNull(project.archivedAt));
+      .where(and(isNull(project.archivedAt), scope(await ctx.access(), workflowStatus.projectId)));
     return mergeColumns(rows);
   }),
 
@@ -152,6 +157,7 @@ export const issueRouter = router({
   moveToStatus: memberProcedure
     .input(z.object({ id: z.string().uuid(), name: z.string().trim().min(1).max(40) }))
     .mutation(async ({ ctx, input }) => {
+      await ctx.requireIssue(input.id, "write");
       const [i] = await ctx.db
         .select({ projectId: issue.projectId, projectKey: project.key, statusName: workflowStatus.name })
         .from(issue)
@@ -186,6 +192,7 @@ export const issueRouter = router({
       .innerJoin(reporter, eq(reporter.id, issue.reporterId))
       .where(and(eq(project.key, input.key.key), eq(issue.number, input.key.number)));
     if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+    await ctx.requireProject(row.issue.projectId, "read");
 
     const [children, parent, labels] = await Promise.all([
       ctx.db
@@ -213,15 +220,16 @@ export const issueRouter = router({
     return { ...row, assignee: row.assignee?.id ? row.assignee : null, children, parent, labels };
   }),
 
-  activity: authedProcedure.input(z.object({ issueId: z.string().uuid() })).query(({ ctx, input }) =>
-    ctx.db
+  activity: authedProcedure.input(z.object({ issueId: z.string().uuid() })).query(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.issueId, "read");
+    return ctx.db
       .select({ id: activity.id, verb: activity.verb, diff: activity.diff, createdAt: activity.createdAt, actorName: user.name })
       .from(activity)
       .innerJoin(user, eq(user.id, activity.actorId))
       .where(eq(activity.issueId, input.issueId))
       .orderBy(desc(activity.createdAt))
-      .limit(200),
-  ),
+      .limit(200);
+  }),
 
   /** ⌘K / global search across projects. */
   search: authedProcedure.input(z.object({ q: z.string().trim().min(1).max(200) })).query(async ({ ctx, input }) => {
@@ -231,30 +239,35 @@ export const issueRouter = router({
       .select({ id: issue.id, key: sql<string>`${project.key} || '-' || ${issue.number}`, title: issue.title, type: issue.type })
       .from(issue)
       .innerJoin(project, eq(project.id, issue.projectId))
-      .where(and(isNull(issue.deletedAt), isNull(project.archivedAt), match))
+      .where(and(isNull(issue.deletedAt), isNull(project.archivedAt), match, scope(await ctx.access())))
       .orderBy(desc(issue.updatedAt))
       .limit(10);
   }),
 
   create: memberProcedure.input(issueCreate).mutation(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "write");
     const row = await write(ctx.db, (tx) => createIssue(tx, ctx.user.id, input));
     const [p] = await ctx.db.select({ key: project.key }).from(project).where(eq(project.id, row.projectId));
     return { ...row, key: `${p.key}-${row.number}` };
   }),
 
-  update: memberProcedure.input(issueUpdate.omit({ rank: true })).mutation(({ ctx, input }) =>
-    write(ctx.db, (tx) => updateIssue(tx, ctx.user.id, input)),
-  ),
+  update: memberProcedure.input(issueUpdate.omit({ rank: true })).mutation(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.id, "write");
+    return write(ctx.db, (tx) => updateIssue(tx, ctx.user.id, input));
+  }),
 
-  move: memberProcedure.input(issueMove).mutation(({ ctx, input }) =>
-    write(ctx.db, (tx) => moveIssue(tx, ctx.user.id, input)),
-  ),
+  move: memberProcedure.input(issueMove).mutation(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.id, "write");
+    return write(ctx.db, (tx) => moveIssue(tx, ctx.user.id, input));
+  }),
 
-  delete: memberProcedure.input(z.object({ id: z.string().uuid() })).mutation(({ ctx, input }) =>
-    write(ctx.db, (tx) => setDeleted(tx, ctx.user.id, input.id, true)),
-  ),
+  delete: memberProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.id, "write");
+    return write(ctx.db, (tx) => setDeleted(tx, ctx.user.id, input.id, true));
+  }),
 
-  restore: memberProcedure.input(z.object({ id: z.string().uuid() })).mutation(({ ctx, input }) =>
-    write(ctx.db, (tx) => setDeleted(tx, ctx.user.id, input.id, false)),
-  ),
+  restore: memberProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.id, "write");
+    return write(ctx.db, (tx) => setDeleted(tx, ctx.user.id, input.id, false));
+  }),
 });

@@ -22,13 +22,17 @@
 
 # misc
 .DS_Store
+Thumbs.db
 *.pem
+.idea/
+.claude/settings.local.json
 
 # debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log
 
 # env files (can opt-in for committing if needed)
 .env*
@@ -41,12 +45,15 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# local
-.pglite/
+# local data (PGlite dbs incl. e2e + broken backups, uploads)
+/.pglite*/
+/.uploads/
 .remember/
-/test-results/
-.pglite-e2e/
+
+# e2e / playwright
 /.next-e2e/
 .e2e-outbox.jsonl
+/test-results/
 /playwright-report/
-/.uploads/
+/blob-report/
+/playwright/.cache/

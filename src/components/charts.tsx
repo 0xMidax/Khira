@@ -33,7 +33,7 @@ const short = (d: string) => d.slice(5);
 
 export function ChartCard({ title, subtitle, children, table }: { title: string; subtitle?: React.ReactNode; children: React.ReactNode; table?: { head: string[]; rows: (string | number | null)[][] } }) {
   return (
-    <section className="rounded-lg border border-line bg-surface p-4">
+    <section className="card p-4">
       <h2 className="font-semibold">{title}</h2>
       {subtitle && <p className="mb-2 text-[13px] text-muted">{subtitle}</p>}
       <div className="h-64">{children}</div>
@@ -167,7 +167,7 @@ export function Workload({ data }: { data: { name: string; points: number; issue
 
 export function Stat({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) {
   return (
-    <div className="rounded-lg border border-line bg-surface p-4">
+    <div className="card p-4">
       <div className="text-[13px] text-muted">{label}</div>
       <div className="text-2xl font-semibold tabular-nums">{value}</div>
       {hint && <div className="text-[12px] text-muted">{hint}</div>}

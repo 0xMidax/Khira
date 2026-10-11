@@ -23,6 +23,7 @@ export const dataRouter = router({
   }),
 
   importCsv: memberProcedure.input(z.object({ projectId: z.string().uuid(), csv: z.string().max(5_000_000) })).mutation(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "write");
     const rows = parseCsv(input.csv);
     if (rows.length < 2) throw new TRPCError({ code: "BAD_REQUEST", message: "The file needs a header row and at least one issue." });
     if (rows.length - 1 > MAX_ROWS) throw new TRPCError({ code: "BAD_REQUEST", message: `Import up to ${MAX_ROWS} issues at a time.` });

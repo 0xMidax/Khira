@@ -36,7 +36,7 @@ export default function ReportsPage({ params }: { params: Promise<{ key: string 
           <Link href={`/p/${key}`} className="font-mono text-[12px] text-muted hover:text-ink">
             {key}
           </Link>
-          <h1 className="text-2xl font-semibold">Reports</h1>
+          <h1 className="page-title">Reports</h1>
         </div>
         <label className="flex items-center gap-2 text-[13px] text-muted">
           Range
@@ -93,7 +93,7 @@ export default function ReportsPage({ params }: { params: Promise<{ key: string 
         </ChartCard>
       </div>
 
-      <section className="mt-4 rounded-lg border border-line bg-surface p-4">
+      <section className="mt-4 card p-4">
         <h2 className="font-semibold">Workload heatmap</h2>
         <p className="mb-3 text-[13px] text-muted">Points per person per sprint (unestimated issues count as 1). Darker means more load.</p>
         {heat.data?.sprints.length ? (

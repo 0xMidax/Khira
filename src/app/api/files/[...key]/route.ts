@@ -1,15 +1,13 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/server/db";
-import { attachment } from "@/server/db/schema";
-import { getSession } from "@/server/auth";
+import { loadAccess } from "@/server/access";
+import { attachment, issue } from "@/server/db/schema";
+import { getMember } from "@/server/auth";
 import { inlineSafe, MAX_UPLOAD_BYTES, readLocal, usingS3, writeLocal } from "@/server/storage";
 
 // Local-disk storage for development (and single-server installs). With S3/R2 configured, browsers talk to the bucket directly.
 
-async function member() {
-  const s = await getSession();
-  return s?.user.emailVerified ? s.user : null;
-}
+const member = getMember;
 
 export async function PUT(req: Request, { params }: { params: Promise<{ key: string[] }> }) {
   if (usingS3) return new Response("Not found", { status: 404 });
@@ -31,10 +29,14 @@ export async function PUT(req: Request, { params }: { params: Promise<{ key: str
 
 export async function GET(_req: Request, { params }: { params: Promise<{ key: string[] }> }) {
   if (usingS3) return new Response("Not found", { status: 404 });
-  if (!(await member())) return new Response("Unauthorized", { status: 401 });
+  const me = await member();
+  if (!me) return new Response("Unauthorized", { status: 401 });
   const storageKey = (await params).key.join("/");
   const [a] = await db.select().from(attachment).where(and(eq(attachment.storageKey, storageKey), eq(attachment.uploaded, true)));
   if (!a) return new Response("Not found", { status: 404 });
+  // Files of private projects are only for people who can see that project.
+  const [i] = await db.select({ projectId: issue.projectId }).from(issue).where(eq(issue.id, a.issueId));
+  if (!i || !(await loadAccess(db, me)).roleIn(i.projectId)) return new Response("Not found", { status: 404 });
   const data = await readLocal(storageKey);
   return new Response(new Uint8Array(data), {
     headers: {

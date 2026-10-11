@@ -2,11 +2,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Sparkles } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ISSUE_TYPES, PRIORITIES } from "@/lib/validators";
 import { useTRPC } from "@/trpc/react";
+import { useOpenIssue } from "./issue-modal";
 import { MentionTextarea } from "./mention-textarea";
 import { Button, field, Input, IssueKey, Kbd, Modal, PRIORITY_META, Select, TYPE_META } from "./ui";
 
@@ -22,7 +22,7 @@ const EMPTY: Draft = { title: "", type: "task", priority: "none", assigneeId: ""
 export function CreateIssueDialog({ open, onClose, defaultProjectId }: { open: boolean; onClose: () => void; defaultProjectId?: string }) {
   const trpc = useTRPC();
   const qc = useQueryClient();
-  const router = useRouter();
+  const openIssue = useOpenIssue();
   const projects = useQuery({ ...trpc.project.list.queryOptions(), enabled: open });
   const users = useQuery({ ...trpc.user.list.queryOptions(), enabled: open });
   const ai = useQuery({ ...trpc.ai.status.queryOptions(), enabled: open });
@@ -53,7 +53,7 @@ export function CreateIssueDialog({ open, onClose, defaultProjectId }: { open: b
     qc.invalidateQueries({ queryKey: trpc.issue.pathKey() });
     qc.invalidateQueries({ queryKey: trpc.project.list.queryKey() });
     close();
-    toast.success(`Created ${row.key}`, { action: { label: "Open", onClick: () => router.push(`/i/${row.key}`) } });
+    toast.success(`Created ${row.key}`, { action: { label: "Open", onClick: () => openIssue(row.key) } });
   };
   const create = useMutation(trpc.issue.create.mutationOptions({ onSuccess: created }));
   const fromTemplate = useMutation(

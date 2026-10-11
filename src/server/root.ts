@@ -7,7 +7,7 @@ import { issueExtrasRouter, settingsRouter } from "./routers/extras";
 import { issueRouter } from "./routers/issue";
 import { releaseRouter } from "./routers/release";
 import { reportsRouter, timeRouter } from "./routers/reports";
-import { commentRouter, notificationRouter, userRouter } from "./routers/misc";
+import { commentRouter, inviteRouter, notificationRouter, userRouter } from "./routers/misc";
 import { projectRouter } from "./routers/project";
 import { createCallerFactory, router } from "./trpc";
 
@@ -17,6 +17,7 @@ export const appRouter = router({
   comment: commentRouter,
   notification: notificationRouter,
   user: userRouter,
+  invite: inviteRouter,
   search: searchRouter,
   sprint: sprintRouter,
   workflow: workflowRouter,

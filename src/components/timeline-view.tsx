@@ -8,10 +8,9 @@ import { useTRPC } from "@/trpc/react";
 const DAY = 86_400_000;
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
-export default function Timeline() {
+/** Dated issues of one project (a tab on the project page). */
+export function TimelineView({ projectId }: { projectId: string }) {
   const trpc = useTRPC();
-  const projects = useQuery(trpc.project.list.queryOptions());
-  const [projectId, setProjectId] = useState("");
   const [months, setMonths] = useState(3);
   const [epicsOnly, setEpicsOnly] = useState(true);
   const start = useMemo(() => {
@@ -21,27 +20,18 @@ export default function Timeline() {
     return new Date(iso(d) + "T00:00:00Z");
   }, []);
   const end = new Date(start.getTime() + months * 31 * DAY);
-  const items = useQuery(trpc.dashboard.dated.queryOptions({ projectId: projectId || undefined, from: iso(start), to: iso(end), epicsOnly }));
+  const items = useQuery(trpc.dashboard.dated.queryOptions({ projectId, from: iso(start), to: iso(end), epicsOnly }));
   const span = end.getTime() - start.getTime();
   const pct = (d: Date) => Math.min(100, Math.max(0, ((d.getTime() - start.getTime()) / span) * 100));
   const monthsList = Array.from({ length: months + 1 }, (_, i) => new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + i, 1))).filter((m) => m < end);
   const today = pct(new Date());
 
   return (
-    <main className="px-4 py-6 md:px-8">
+    <div className="px-4 pb-6 md:px-6">
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <div className="mr-auto">
-          <h1 className="text-2xl font-semibold">Timeline</h1>
           <p className="text-muted">Bars run from start date to due date. Give epics both dates to plan them here.</p>
         </div>
-        <Select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="w-44" aria-label="Project">
-          <option value="">All projects</option>
-          {projects.data?.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </Select>
         <Select value={months} onChange={(e) => setMonths(Number(e.target.value))} className="w-32" aria-label="Range">
           <option value={3}>3 months</option>
           <option value={6}>6 months</option>
@@ -51,7 +41,7 @@ export default function Timeline() {
           <input type="checkbox" checked={epicsOnly} onChange={(e) => setEpicsOnly(e.target.checked)} /> Epics only
         </label>
       </div>
-      <div className="overflow-x-auto rounded-lg border border-line bg-surface">
+      <div className="overflow-x-auto card">
         <div className="min-w-[900px]">
           <div className="relative ml-72 h-8 border-b border-line text-[12px] text-muted">
             {monthsList.map((m) => (
@@ -89,6 +79,6 @@ export default function Timeline() {
           })}
         </div>
       </div>
-    </main>
+    </div>
   );
 }

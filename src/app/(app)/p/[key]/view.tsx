@@ -1,13 +1,15 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
-import { BarChart3, Columns3, List, ListOrdered, Maximize2, MessagesSquare, Rocket, Settings, X } from "lucide-react";
+import { BarChart3, CalendarDays, ChartGantt, Columns3, Globe, List, ListOrdered, MessagesSquare, Rocket, Settings } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Backlog } from "@/components/backlog";
 import { Board } from "@/components/board";
-import { useShell } from "@/components/shell";
-import { IssueDetail } from "@/components/issue-detail";
+import { CalendarView } from "@/components/calendar-view";
+import { useOpenIssue } from "@/components/issue-modal";
+import { ProjectSummary } from "@/components/project-summary";
+import { TimelineView } from "@/components/timeline-view";
 import { Avatar, Button, cn, Input, IssueKey, PRIORITY_META, PriorityIcon, Select, STATUS_DOT, TYPE_META, TypeIcon } from "@/components/ui";
 import { ISSUE_TYPES, PRIORITIES } from "@/lib/validators";
 import { useTRPC } from "@/trpc/react";
@@ -15,11 +17,10 @@ import { useTRPC } from "@/trpc/react";
 export function ProjectView({ projectKey }: { projectKey: string }) {
   const trpc = useTRPC();
   const router = useRouter();
+  const openIssue = useOpenIssue();
   const pathname = usePathname();
   const params = useSearchParams();
-  const requestedView = (["list", "backlog"] as const).find((v) => v === params.get("view")) ?? "board";
-  const { me } = useShell();
-  const openKey = params.get("issue");
+  const requestedView = (["summary", "timeline", "backlog", "calendar", "list"] as const).find((v) => v === params.get("view")) ?? "board";
 
   const setParam = (k: string, v: string | null) => {
     const next = new URLSearchParams(params);
@@ -56,13 +57,8 @@ export function ProjectView({ projectKey }: { projectKey: string }) {
     q: debouncedQ || undefined,
   };
   const listOpts = trpc.issue.list.queryOptions(filter);
-  const issues = useQuery({ ...listOpts, enabled: !!project.data, placeholderData: (prev) => prev });
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && openKey && !document.querySelector("dialog[open]") && setParam("issue", null);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
+  const listView = view === "board" || view === "backlog" || view === "list";
+  const issues = useQuery({ ...listOpts, enabled: !!project.data && listView, placeholderData: (prev) => prev });
 
   if (project.isError) return <p className="p-8 text-muted">There’s no project with the key {projectKey}. Check the URL, or pick a project from the sidebar.</p>;
   if (!project.data) return <p className="p-8 text-muted">Loading…</p>;
@@ -82,35 +78,13 @@ export function ProjectView({ projectKey }: { projectKey: string }) {
               {p.key.slice(0, 2)}
             </span>
             <div>
-              <h1 className="flex items-center gap-2 text-2xl leading-tight">
+              <h1 className="flex items-center gap-2 page-title">
                 {p.name}
                 <span className="rounded-full border border-line bg-surface px-2 py-0.5 font-sans text-[11px] font-semibold tracking-normal text-muted">{kanban ? "Kanban" : "Scrum"}</span>
               </h1>
               <div className="font-mono text-[12px] text-muted">{p.key}{p.description ? ` · ${p.description}` : ""}</div>
             </div>
           </div>
-        </div>
-        <div role="tablist" aria-label="View" data-tour="views" className="flex rounded-md border border-line bg-surface p-0.5">
-          {(
-            [
-              ["board", "Board", Columns3],
-              ["backlog", "Backlog", ListOrdered],
-              ["list", "List", List],
-            ] as const
-          )
-            .filter(([v]) => !(kanban && v === "backlog"))
-            .map(([v, label, Icon]) => (
-            <button
-              key={v}
-              role="tab"
-              aria-selected={view === v}
-              onClick={() => setParam("view", v === "board" ? null : v)}
-              className={cn("flex items-center gap-1.5 rounded px-2.5 py-1 text-[13px]", view === v ? "bg-sunken font-medium" : "text-muted hover:text-ink")}
-            >
-              <Icon size={14} />
-              {label}
-            </button>
-          ))}
         </div>
         <span data-tour="project-links" className="flex flex-wrap items-center gap-1">
         <Link href={`/p/${p.key}/releases`} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-muted hover:bg-sunken hover:text-ink">
@@ -124,15 +98,43 @@ export function ProjectView({ projectKey }: { projectKey: string }) {
         <Link href={`/p/${p.key}/reports`} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-muted hover:bg-sunken hover:text-ink">
           <BarChart3 size={14} /> Reports
         </Link>
-        {me.role === "admin" && (
+        {p.myRole === "admin" && (
           <Link href={`/p/${p.key}/settings`} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-muted hover:bg-sunken hover:text-ink">
             <Settings size={14} /> Settings
           </Link>
         )}
         </span>
       </header>
+      <div role="tablist" aria-label="View" data-tour="views" className="flex gap-1 overflow-x-auto border-b border-line px-4 md:px-6">
+        {(
+          [
+            ["summary", "Summary", Globe],
+            ["timeline", "Timeline", ChartGantt],
+            ["backlog", "Backlog", ListOrdered],
+            ["board", "Board", Columns3],
+            ["calendar", "Calendar", CalendarDays],
+            ["list", "List", List],
+          ] as const
+        )
+          .filter(([v]) => !(kanban && v === "backlog"))
+          .map(([v, label, Icon]) => (
+            <button
+              key={v}
+              role="tab"
+              aria-selected={view === v}
+              onClick={() => setParam("view", v === "board" ? null : v)}
+              className={cn(
+                "-mb-px flex shrink-0 items-center gap-1.5 border-b-2 px-2.5 py-2 text-[13px] transition-colors",
+                view === v ? "border-accent font-semibold text-ink" : "border-transparent text-muted hover:border-line hover:text-ink",
+              )}
+            >
+              <Icon size={15} />
+              {label}
+            </button>
+          ))}
+      </div>
 
-      <div className="flex flex-wrap items-center gap-2 px-4 pb-3 md:px-6" data-tour="filters">
+      {listView && <div className="flex flex-wrap items-center gap-2 px-4 pt-3 pb-3 md:px-6" data-tour="filters">
         <Input value={q} onChange={(e) => (setQ(e.target.value), setParam("q", e.target.value || null))} placeholder="Filter by text or number" className="w-56" aria-label="Filter issues" />
         <Select value={assignee ?? ""} onChange={(e) => setParam("assignee", e.target.value || null)} className="w-40" aria-label="Assignee">
           <option value="">Anyone</option>
@@ -186,33 +188,21 @@ export function ProjectView({ projectKey }: { projectKey: string }) {
             Clear filters
           </Button>
         )}
-      </div>
+      </div>}
 
       {view === "board" && boardScoped && activeSprint.goal && <p className="-mt-1 px-4 pb-2 text-[13px] text-muted md:px-6">Sprint goal: {activeSprint.goal}</p>}
       {view === "board" ? (
-        <Board statuses={p.statuses} issues={issues.data ?? []} onOpen={(k) => setParam("issue", k)} listKey={listOpts.queryKey} projectId={p.id} />
+        <Board statuses={p.statuses} issues={issues.data ?? []} onOpen={openIssue} listKey={listOpts.queryKey} projectId={p.id} />
       ) : view === "backlog" ? (
-        <Backlog projectId={p.id} statuses={p.statuses} issues={issues.data ?? []} onOpen={(k) => setParam("issue", k)} listKey={listOpts.queryKey} />
+        <Backlog projectId={p.id} statuses={p.statuses} issues={issues.data ?? []} onOpen={openIssue} listKey={listOpts.queryKey} />
+      ) : view === "list" ? (
+        <IssueTable statuses={p.statuses} issues={issues.data ?? []} onOpen={openIssue} />
       ) : (
-        <IssueTable statuses={p.statuses} issues={issues.data ?? []} onOpen={(k) => setParam("issue", k)} />
+        <div className="min-h-0 flex-1 overflow-y-auto pt-4">
+          {view === "summary" ? <ProjectSummary projectId={p.id} statuses={p.statuses} /> : view === "timeline" ? <TimelineView projectId={p.id} /> : <CalendarView projectId={p.id} />}
+        </div>
       )}
 
-      {openKey && (
-        <>
-          <div className="fixed inset-0 z-30 bg-black/20" onClick={() => setParam("issue", null)} aria-hidden />
-          <div role="dialog" aria-label={openKey} className="fixed inset-y-0 right-0 z-40 w-full overflow-y-auto border-l border-line bg-bg shadow-2xl sm:w-[min(920px,90vw)]">
-            <div className="sticky top-0 z-10 flex justify-end gap-1 border-b border-line bg-bg/90 px-3 py-2 backdrop-blur">
-              <Link href={`/i/${openKey}`} className="rounded-md p-1.5 text-muted hover:bg-sunken hover:text-ink" aria-label="Open full page">
-                <Maximize2 size={16} />
-              </Link>
-              <button onClick={() => setParam("issue", null)} className="rounded-md p-1.5 text-muted hover:bg-sunken hover:text-ink" aria-label="Close">
-                <X size={16} />
-              </button>
-            </div>
-            <IssueDetail issueKey={openKey} onDeleted={() => setParam("issue", null)} />
-          </div>
-        </>
-      )}
     </main>
   );
 }

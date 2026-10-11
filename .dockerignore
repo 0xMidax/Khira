@@ -1,0 +1,13 @@
+.git
+node_modules
+.next
+.next-e2e
+.pglite*
+.uploads
+.env*
+!.env.example
+test-results
+playwright-report
+.remember
+.claude
+*.log

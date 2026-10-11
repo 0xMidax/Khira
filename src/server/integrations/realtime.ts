@@ -1,14 +1,18 @@
 import Pusher from "pusher";
+import { publicConfig } from "@/lib/public-config";
 
-// ponytail: without PUSHER_* the client falls back to polling; set them for live boards.
+const cfg = publicConfig().pusher;
 const pusher =
-  process.env.PUSHER_APP_ID && process.env.PUSHER_SECRET && process.env.NEXT_PUBLIC_PUSHER_KEY
+  cfg && process.env.PUSHER_APP_ID && process.env.PUSHER_SECRET
     ? new Pusher({
         appId: process.env.PUSHER_APP_ID,
-        key: process.env.NEXT_PUBLIC_PUSHER_KEY,
+        key: cfg.key,
         secret: process.env.PUSHER_SECRET,
-        cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER ?? "mt1",
-        useTLS: true,
+        cluster: cfg.cluster,
+        // Inside docker compose the server reaches Soketi directly (no TLS); browsers go through your public host.
+        useTLS: process.env.PUSHER_INTERNAL_HOST ? false : cfg.tls,
+        // Soketi: talk to your own server instead of Pusher's cloud.
+        ...(cfg.host ? { host: process.env.PUSHER_INTERNAL_HOST ?? cfg.host, port: String(process.env.PUSHER_INTERNAL_PORT ?? cfg.port ?? 6001) } : {}),
       })
     : null;
 

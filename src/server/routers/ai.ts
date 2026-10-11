@@ -4,6 +4,7 @@ import { z as zod } from "zod";
 import { KqlError, parseKql } from "@/lib/kql";
 import { aiEnabled, prose, structured, z } from "../ai";
 import { comment, issue, label, project, release, sprint, user, workflowStatus } from "../db/schema";
+import { scope } from "../access";
 import { BOT_ID } from "../services/bot";
 import { draftNotes, releaseIssues } from "./release";
 import { authedProcedure, memberProcedure, router } from "../trpc";
@@ -32,6 +33,7 @@ export const aiRouter = router({
 
   /** Messy notes → a structured issue draft the user reviews before saving. */
   draftIssue: memberProcedure.input(zod.object({ projectId: id, notes: zod.string().trim().min(3).max(20_000) })).mutation(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "write");
     const { people, labels } = await teamContext(ctx.db, input.projectId);
     const Draft = z.object({
       title: z.string().describe("Imperative, under 80 characters"),
@@ -58,6 +60,7 @@ export const aiRouter = router({
 
   /** Break an epic into stories (returned for review, not created). */
   splitEpic: memberProcedure.input(zod.object({ issueId: id })).mutation(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.issueId, "write");
     const [i] = await ctx.db.select({ title: issue.title, description: issue.description }).from(issue).where(eq(issue.id, input.issueId));
     if (!i) throw new TRPCError({ code: "NOT_FOUND" });
     const Plan = z.object({
@@ -71,10 +74,10 @@ export const aiRouter = router({
   /** "bugs assigned to me due this week" → KQL (validated before returning). */
   toKql: authedProcedure.input(zod.object({ text: zod.string().trim().min(2).max(500) })).mutation(async ({ ctx, input }) => {
     const [projects, statuses, people, sprints] = await Promise.all([
-      ctx.db.select({ key: project.key, name: project.name }).from(project).where(isNull(project.archivedAt)),
-      ctx.db.selectDistinct({ name: workflowStatus.name }).from(workflowStatus),
+      ctx.db.select({ key: project.key, name: project.name }).from(project).where(and(isNull(project.archivedAt), scope(await ctx.access(), project.id))),
+      ctx.db.selectDistinct({ name: workflowStatus.name }).from(workflowStatus).where(scope(await ctx.access(), workflowStatus.projectId)),
       ctx.db.select({ name: user.name }).from(user).where(ne(user.id, BOT_ID)),
-      ctx.db.select({ name: sprint.name }).from(sprint).where(ne(sprint.state, "closed")),
+      ctx.db.select({ name: sprint.name }).from(sprint).where(and(ne(sprint.state, "closed"), scope(await ctx.access(), sprint.projectId))),
     ]);
     const guide = `KQL grammar: clauses "field op value" joined with AND/OR/NOT and parentheses, then optional "ORDER BY field ASC|DESC".
 Fields: project, key, status, category (todo|in_progress|done), type (${TYPES.join("|")}), priority (${PRIORITIES.join("|")}; supports < > comparisons), assignee, reporter, label, sprint, release, parent, created, updated, due, resolved, estimate, text, title, triage (true|false).
@@ -95,6 +98,7 @@ Projects: ${JSON.stringify(projects)}. Statuses: ${JSON.stringify(statuses.map((
 
   /** TL;DR of an issue's comment thread. */
   summarize: authedProcedure.input(zod.object({ issueId: id })).mutation(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.issueId, "read");
     const [i] = await ctx.db.select({ title: issue.title, description: issue.description }).from(issue).where(eq(issue.id, input.issueId));
     if (!i) throw new TRPCError({ code: "NOT_FOUND" });
     const cs = await ctx.db
@@ -113,6 +117,7 @@ Projects: ${JSON.stringify(projects)}. Statuses: ${JSON.stringify(statuses.map((
 
   /** Suggest project/type/priority/assignee/labels for a triage issue. */
   triageSuggest: memberProcedure.input(zod.object({ issueId: id })).mutation(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.issueId, "write");
     const [i] = await ctx.db.select({ title: issue.title, description: issue.description, projectId: issue.projectId }).from(issue).where(eq(issue.id, input.issueId));
     if (!i) throw new TRPCError({ code: "NOT_FOUND" });
     const { people, labels } = await teamContext(ctx.db, i.projectId);
@@ -135,6 +140,7 @@ Projects: ${JSON.stringify(projects)}. Statuses: ${JSON.stringify(statuses.map((
   releaseNotes: memberProcedure.input(zod.object({ releaseId: id })).mutation(async ({ ctx, input }) => {
     const [r] = await ctx.db.select().from(release).where(eq(release.id, input.releaseId));
     if (!r) throw new TRPCError({ code: "NOT_FOUND" });
+    await ctx.requireProject(r.projectId, "write");
     const items = await releaseIssues(ctx.db, r.id);
     if (!aiEnabled) return draftNotes(r.name, items);
     const done = items.filter((i) => i.statusCategory === "done");
@@ -150,6 +156,7 @@ Projects: ${JSON.stringify(projects)}. Statuses: ${JSON.stringify(statuses.map((
   similar: authedProcedure
     .input(zod.object({ projectId: id.optional(), text: zod.string().max(500), excludeId: id.optional() }))
     .query(async ({ ctx, input }) => {
+      if (input.projectId) await ctx.requireProject(input.projectId, "read");
       const q = similarityQuery(input.text);
       const words = q ? q.split(" | ") : [];
       if (words.length < 2) return [];
@@ -179,6 +186,7 @@ Projects: ${JSON.stringify(projects)}. Statuses: ${JSON.stringify(statuses.map((
             input.projectId ? eq(issue.projectId, input.projectId) : undefined,
             input.excludeId ? ne(issue.id, input.excludeId) : undefined,
             gte(issue.createdAt, new Date(Date.now() - 365 * 86_400_000)),
+            scope(await ctx.access()),
           ),
         )
         .orderBy(desc(overlap), desc(sql`ts_rank(${issue.search}, ${tsq})`))

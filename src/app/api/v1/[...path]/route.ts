@@ -25,7 +25,7 @@ async function authenticate(req: Request) {
     .select({ tokenId: apiToken.id, id: user.id, name: user.name, email: user.email, role: user.role, emailVerified: user.emailVerified })
     .from(apiToken)
     .innerJoin(user, eq(user.id, apiToken.userId))
-    .where(and(eq(apiToken.hash, sha256(raw)), isNull(apiToken.revokedAt)));
+    .where(and(eq(apiToken.hash, sha256(raw)), isNull(apiToken.revokedAt), isNull(user.deactivatedAt)));
   if (!row) return null;
   void db.update(apiToken).set({ lastUsedAt: new Date() }).where(eq(apiToken.id, row.tokenId)).catch(() => {});
   return row;

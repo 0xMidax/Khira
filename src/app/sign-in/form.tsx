@@ -5,9 +5,11 @@ import { Button, Input } from "@/components/ui";
 import { Slice } from "@/components/brand";
 import { authClient } from "@/lib/auth-client";
 
-export function SignInForm({ providers }: { providers: string[] }) {
+export function SignInForm({ providers, initialMode = "in", initialEmail = "" }: { providers: string[]; initialMode?: "in" | "up"; initialEmail?: string }) {
   const router = useRouter();
-  const [mode, setMode] = useState<"in" | "up">("in");
+  const [mode, setMode] = useState<"in" | "up">(initialMode);
+  const [twoFactor, setTwoFactor] = useState(false);
+  const [useBackup, setUseBackup] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
@@ -24,12 +26,59 @@ export function SignInForm({ providers }: { providers: string[] }) {
         ? await authClient.signIn.email({ email, password })
         : await authClient.signUp.email({ email, password, name: String(f.get("name")), callbackURL: "/" });
     setBusy(false);
-    if (mode === "in" && res.error?.status === 403) return setSentTo(email); // unverified: a fresh link was just sent
+    // Only a genuinely unverified email means "check your inbox" (a fresh link was just sent).
+    if (mode === "in" && res.error?.code === "EMAIL_NOT_VERIFIED") return setSentTo(email);
+    if (res.error?.code === "INVALID_ORIGIN")
+      return setError("Khira is set up for a different address. Open it at the address in BETTER_AUTH_URL (or add this one to TRUSTED_ORIGINS).");
     if (res.error) return setError(res.error.message ?? "Something went wrong. Try again.");
+    if (mode === "in" && res.data && "twoFactorRedirect" in res.data && res.data.twoFactorRedirect) return setTwoFactor(true);
     if (mode === "up") return setSentTo(email);
     router.replace("/");
     router.refresh();
   }
+
+  async function verifyCode(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const code = String(new FormData(e.currentTarget).get("code")).replace(/\s/g, "");
+    setBusy(true);
+    setError(null);
+    const res = useBackup ? await authClient.twoFactor.verifyBackupCode({ code }) : await authClient.twoFactor.verifyTotp({ code, trustDevice: true });
+    setBusy(false);
+    if (res.error) return setError(res.error.message ?? "That code didn't work. Try again.");
+    router.replace("/");
+    router.refresh();
+  }
+
+  if (twoFactor)
+    return (
+      <main className="grid min-h-dvh place-items-center px-4">
+        <form onSubmit={verifyCode} className="w-full max-w-sm space-y-3">
+          <h1 className="text-[1.75rem] leading-tight">Two-step verification</h1>
+          <p className="text-muted">{useBackup ? "Enter one of your backup codes." : "Enter the 6-digit code from your authenticator app."}</p>
+          <Input
+            name="code"
+            required
+            autoFocus
+            autoComplete="one-time-code"
+            inputMode={useBackup ? "text" : "numeric"}
+            placeholder={useBackup ? "xxxxx-xxxxx" : "123456"}
+            aria-label={useBackup ? "Backup code" : "Authentication code"}
+            className="h-11 text-center font-mono text-lg tracking-[0.3em]"
+          />
+          {error && (
+            <p role="alert" className="text-[13px] text-danger">
+              {error}
+            </p>
+          )}
+          <Button variant="primary" className="h-10 w-full" disabled={busy}>
+            Verify
+          </Button>
+          <button type="button" className="text-[13px] text-accent hover:underline" onClick={() => (setUseBackup(!useBackup), setError(null))}>
+            {useBackup ? "Use my authenticator app instead" : "Lost your phone? Use a backup code"}
+          </button>
+        </form>
+      </main>
+    );
 
   if (sentTo)
     return (
@@ -37,7 +86,7 @@ export function SignInForm({ providers }: { providers: string[] }) {
         <div className="w-full max-w-sm">
           <h1 className="mb-2 text-xl font-semibold">Check your email</h1>
           <p className="mb-6 text-muted">
-            We sent a verification link to <span className="text-ink">{sentTo}</span>. Open it to finish signing in.
+            We sent a verification link to <span className="text-ink">{sentTo}</span>. Open it to finish signing in. If you already have an account, go back and sign in instead.
           </p>
           <Button onClick={() => (setSentTo(null), setMode("in"))}>Back to sign in</Button>
         </div>
@@ -81,12 +130,17 @@ export function SignInForm({ providers }: { providers: string[] }) {
           )}
           <label className="block">
             <span className="mb-1 block text-[13px] text-muted">Email</span>
-            <Input name="email" type="email" required autoComplete="email" />
+            <Input name="email" type="email" required autoComplete="email" defaultValue={initialEmail} />
           </label>
           <label className="block">
             <span className="mb-1 block text-[13px] text-muted">Password</span>
             <Input name="password" type="password" required minLength={10} autoComplete={mode === "in" ? "current-password" : "new-password"} />
           </label>
+          {mode === "in" && (
+            <a href="/forgot-password" className="-mt-1 block text-right text-[13px] text-accent hover:underline">
+              Forgot password?
+            </a>
+          )}
           {error && (
             <p role="alert" className="text-[13px] text-danger">
               {error}

@@ -203,7 +203,7 @@ export function Backlog({ projectId, statuses, issues, onOpen, listKey }: { proj
 function Section({ id, readOnly, children }: { id: string; readOnly: boolean; children: React.ReactNode }) {
   const { setNodeRef, isOver } = useDroppable({ id, disabled: readOnly });
   return (
-    <section ref={setNodeRef} aria-label={id === BACKLOG ? "Backlog" : undefined} className={cn("rounded-lg border border-line bg-surface", isOver && "ring-2 ring-accent")}>
+    <section ref={setNodeRef} aria-label={id === BACKLOG ? "Backlog" : undefined} className={cn("card", isOver && "ring-2 ring-accent")}>
       {children}
     </section>
   );

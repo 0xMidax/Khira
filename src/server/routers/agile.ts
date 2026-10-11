@@ -4,9 +4,10 @@ import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { KqlError } from "@/lib/kql";
 import { issue, project, savedFilter, sprint, user, workflowStatus, workflowTransition } from "../db/schema";
+import { type Access, scope } from "../access";
 import { compileKql } from "../kql";
 import { logActivity, write } from "../services/issues";
-import { adminProcedure, authedProcedure, memberProcedure, router } from "../trpc";
+import { authedProcedure, memberProcedure, router } from "../trpc";
 
 const id = z.string().uuid();
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -37,7 +38,7 @@ export const queryColumns = {
 };
 
 /** Shared by search, saved filters, dashboards and the API. */
-export async function runKql(db: typeof import("../db").db, kql: string, meId: string, limit = 200) {
+export async function runKql(db: typeof import("../db").db, kql: string, meId: string, access: Access, limit = 200) {
   let compiled;
   try {
     compiled = compileKql(kql, { meId, now: new Date() });
@@ -51,7 +52,7 @@ export async function runKql(db: typeof import("../db").db, kql: string, meId: s
     .innerJoin(project, eq(project.id, issue.projectId))
     .innerJoin(workflowStatus, eq(workflowStatus.id, issue.statusId))
     .leftJoin(assignee, eq(assignee.id, issue.assigneeId))
-    .where(and(isNull(issue.deletedAt), isNull(project.archivedAt), compiled.where))
+    .where(and(isNull(issue.deletedAt), isNull(project.archivedAt), compiled.where, scope(access)))
     .orderBy(...compiled.orderBy)
     .limit(limit);
 }
@@ -61,7 +62,7 @@ export async function runKql(db: typeof import("../db").db, kql: string, meId: s
 export const searchRouter = router({
   query: authedProcedure
     .input(z.object({ kql: z.string().max(2000), limit: z.number().int().min(1).max(1000).default(200) }))
-    .query(({ ctx, input }) => runKql(ctx.db, input.kql, ctx.user.id, input.limit)),
+    .query(async ({ ctx, input }) => runKql(ctx.db, input.kql, ctx.user.id, await ctx.access(), input.limit)),
 
   filters: authedProcedure.query(({ ctx }) =>
     ctx.db
@@ -74,7 +75,7 @@ export const searchRouter = router({
   saveFilter: memberProcedure
     .input(z.object({ id: id.optional(), name: z.string().trim().min(1).max(80), kql: z.string().max(2000), shared: z.boolean().default(false) }))
     .mutation(async ({ ctx, input }) => {
-      await runKql(ctx.db, input.kql, ctx.user.id, 1); // validate before saving
+      await runKql(ctx.db, input.kql, ctx.user.id, await ctx.access(), 1); // validate before saving
       if (input.id) {
         const [f] = await ctx.db
           .update(savedFilter)
@@ -115,8 +116,9 @@ async function sprintPoints(db: typeof import("../db").db, sprintId: string) {
 }
 
 export const sprintRouter = router({
-  list: authedProcedure.input(z.object({ projectId: id, includeClosed: z.boolean().default(false) })).query(({ ctx, input }) =>
-    ctx.db
+  list: authedProcedure.input(z.object({ projectId: id, includeClosed: z.boolean().default(false) })).query(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "read");
+    return ctx.db
       .select({
         sprint,
         issues: sql<number>`(select count(*)::int from ${issue} i where i.sprint_id = ${sprint.id} and i.deleted_at is null)`,
@@ -124,12 +126,13 @@ export const sprintRouter = router({
       })
       .from(sprint)
       .where(and(eq(sprint.projectId, input.projectId), input.includeClosed ? undefined : ne(sprint.state, "closed")))
-      .orderBy(sql`case ${sprint.state} when 'active' then 0 when 'planned' then 1 else 2 end`, asc(sprint.createdAt)),
-  ),
+      .orderBy(sql`case ${sprint.state} when 'active' then 0 when 'planned' then 1 else 2 end`, asc(sprint.createdAt));
+  }),
 
   create: memberProcedure
     .input(z.object({ projectId: id, name: z.string().trim().min(1).max(80).optional(), goal: z.string().max(500).optional(), startDate: day.optional(), endDate: day.optional() }))
     .mutation(async ({ ctx, input }) => {
+      await ctx.requireProject(input.projectId, "write");
       const [{ n }] = await ctx.db.select({ n: count() }).from(sprint).where(eq(sprint.projectId, input.projectId));
       const [p] = await ctx.db.select({ key: project.key }).from(project).where(eq(project.id, input.projectId));
       if (!p) throw new TRPCError({ code: "NOT_FOUND" });
@@ -143,6 +146,7 @@ export const sprintRouter = router({
   update: memberProcedure
     .input(z.object({ id, name: z.string().trim().min(1).max(80).optional(), goal: z.string().max(500).nullable().optional(), startDate: day.nullable().optional(), endDate: day.nullable().optional() }))
     .mutation(async ({ ctx, input: { id: sprintId, ...patch } }) => {
+      await ctx.requireProject((await sprintOr404(ctx.db, sprintId)).projectId, "write");
       const [s] = await ctx.db.update(sprint).set(patch).where(eq(sprint.id, sprintId)).returning();
       if (!s) throw new TRPCError({ code: "NOT_FOUND" });
       return s;
@@ -150,8 +154,10 @@ export const sprintRouter = router({
 
   start: memberProcedure
     .input(z.object({ id, startDate: day, endDate: day, goal: z.string().max(500).optional() }))
-    .mutation(({ ctx, input }) =>
-      write(ctx.db, async (tx) => {
+    .mutation(async ({ ctx, input }) => {
+      // Check access before opening the transaction (the check reads outside it).
+      await ctx.requireProject((await sprintOr404(ctx.db, input.id)).projectId, "write");
+      return write(ctx.db, async (tx) => {
         const [s] = await tx.select().from(sprint).where(eq(sprint.id, input.id)).for("update");
         if (!s) throw new TRPCError({ code: "NOT_FOUND" });
         if (s.state !== "planned") throw new TRPCError({ code: "BAD_REQUEST", message: "Only a planned sprint can be started." });
@@ -169,12 +175,13 @@ export const sprintRouter = router({
           .returning();
         await logActivity(tx, { actorId: ctx.user.id, projectId: s.projectId, verb: "sprintStarted", diff: { sprint: { from: null, to: s.name } } });
         return row;
-      }),
-    ),
+      });
+    }),
 
   /** Close the sprint; unfinished issues go to `moveTo` (another open sprint) or the backlog (null). */
-  complete: memberProcedure.input(z.object({ id, moveTo: id.nullable() })).mutation(({ ctx, input }) =>
-    write(ctx.db, async (tx) => {
+  complete: memberProcedure.input(z.object({ id, moveTo: id.nullable() })).mutation(async ({ ctx, input }) => {
+    await ctx.requireProject((await sprintOr404(ctx.db, input.id)).projectId, "write");
+    return write(ctx.db, async (tx) => {
       const [s] = await tx.select().from(sprint).where(eq(sprint.id, input.id)).for("update");
       if (!s || s.state !== "active") throw new TRPCError({ code: "BAD_REQUEST", message: "Only the active sprint can be completed." });
       if (input.moveTo) {
@@ -204,17 +211,19 @@ export const sprintRouter = router({
         diff: { sprint: { from: s.name, to: null }, carriedOver: { from: null, to: unfinished.length } },
       });
       return { sprint: row, carriedOver: unfinished.length };
-    }),
-  ),
+    });
+  }),
 
   delete: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
     const s = await sprintOr404(ctx.db, input.id);
+    await ctx.requireProject(s.projectId, "write");
     if (s.state !== "planned") throw new TRPCError({ code: "BAD_REQUEST", message: "Only planned sprints can be deleted." });
     await ctx.db.delete(sprint).where(eq(sprint.id, s.id)); // issues fall back to the backlog (FK set null)
   }),
 
   burndown: authedProcedure.input(z.object({ id })).query(async ({ ctx, input }) => {
     const s = await sprintOr404(ctx.db, input.id);
+    await ctx.requireProject(s.projectId, "read");
     if (!s.startDate || !s.endDate) return { unit: "points" as const, days: [], ...(await sprintPoints(ctx.db, s.id)) };
     const issues = await ctx.db
       .select({ estimate: issue.estimate, resolvedAt: issue.resolvedAt })
@@ -240,16 +249,17 @@ export const sprintRouter = router({
     return { unit: usePoints ? ("points" as const) : ("issues" as const), days, ...(await sprintPoints(ctx.db, s.id)) };
   }),
 
-  velocity: authedProcedure.input(z.object({ projectId: id })).query(async ({ ctx, input }) =>
-    (
+  velocity: authedProcedure.input(z.object({ projectId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "read");
+    return (
       await ctx.db
         .select({ name: sprint.name, committed: sprint.committedPoints, completed: sprint.completedPoints, closedAt: sprint.closedAt })
         .from(sprint)
         .where(and(eq(sprint.projectId, input.projectId), eq(sprint.state, "closed")))
         .orderBy(desc(sprint.closedAt))
         .limit(8)
-    ).reverse(),
-  ),
+    ).reverse();
+  }),
 });
 
 // ---------- Workflow & project settings ----------
@@ -274,6 +284,7 @@ const settingsInput = z.object({
 
 export const workflowRouter = router({
   get: authedProcedure.input(z.object({ projectId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "read");
     const [statuses, transitions, [p]] = await Promise.all([
       ctx.db
         .select({
@@ -290,7 +301,7 @@ export const workflowRouter = router({
     return { statuses, transitions, settings: p.settings };
   }),
 
-  saveStatus: adminProcedure
+  saveStatus: memberProcedure
     .input(
       z.object({
         projectId: id,
@@ -302,6 +313,7 @@ export const workflowRouter = router({
       }),
     )
     .mutation(async ({ ctx, input: { id: statusId, projectId, ...fields } }) => {
+      await ctx.requireProject(projectId, "admin");
       if (statusId) {
         const [s] = await ctx.db
           .update(workflowStatus)
@@ -319,18 +331,20 @@ export const workflowRouter = router({
       return s;
     }),
 
-  reorder: adminProcedure.input(z.object({ projectId: id, order: z.array(id).min(1).max(30) })).mutation(({ ctx, input }) =>
-    ctx.db.transaction(async (tx) => {
+  reorder: memberProcedure.input(z.object({ projectId: id, order: z.array(id).min(1).max(30) })).mutation(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "admin");
+    return ctx.db.transaction(async (tx) => {
       const existing = await tx.select({ id: workflowStatus.id }).from(workflowStatus).where(eq(workflowStatus.projectId, input.projectId));
       if (existing.length !== input.order.length || !existing.every((e) => input.order.includes(e.id)))
         throw new TRPCError({ code: "BAD_REQUEST", message: "Send every status of the project exactly once." });
       for (const [position, sid] of input.order.entries()) await tx.update(workflowStatus).set({ position }).where(eq(workflowStatus.id, sid));
-    }),
-  ),
+    });
+  }),
 
   /** Delete a status, moving its issues to `moveTo` first. */
-  deleteStatus: adminProcedure.input(z.object({ projectId: id, id, moveTo: id })).mutation(({ ctx, input }) =>
-    ctx.db.transaction(async (tx) => {
+  deleteStatus: memberProcedure.input(z.object({ projectId: id, id, moveTo: id })).mutation(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "admin");
+    return ctx.db.transaction(async (tx) => {
       const statuses = await tx.select().from(workflowStatus).where(eq(workflowStatus.projectId, input.projectId));
       const from = statuses.find((s) => s.id === input.id);
       const to = statuses.find((s) => s.id === input.moveTo);
@@ -341,24 +355,26 @@ export const workflowRouter = router({
         .set({ statusId: to.id, resolvedAt: to.category === "done" ? sql`coalesce(${issue.resolvedAt}, now())` : null, statusChangedAt: new Date() })
         .where(eq(issue.statusId, from.id));
       await tx.delete(workflowStatus).where(eq(workflowStatus.id, from.id));
-    }),
-  ),
+    });
+  }),
 
   /** Replace the transition matrix. Empty list = everything allowed. */
-  setTransitions: adminProcedure
+  setTransitions: memberProcedure
     .input(z.object({ projectId: id, transitions: z.array(z.object({ from: id, to: id })).max(900) }))
-    .mutation(({ ctx, input }) =>
-      ctx.db.transaction(async (tx) => {
+    .mutation(async ({ ctx, input }) => {
+      await ctx.requireProject(input.projectId, "admin");
+      return ctx.db.transaction(async (tx) => {
         const ids = new Set((await tx.select({ id: workflowStatus.id }).from(workflowStatus).where(eq(workflowStatus.projectId, input.projectId))).map((s) => s.id));
         if (!input.transitions.every((t) => ids.has(t.from) && ids.has(t.to) && t.from !== t.to))
           throw new TRPCError({ code: "BAD_REQUEST", message: "Transitions must connect two different statuses of this project." });
         await tx.delete(workflowTransition).where(eq(workflowTransition.projectId, input.projectId));
         if (input.transitions.length)
           await tx.insert(workflowTransition).values(input.transitions.map((t) => ({ projectId: input.projectId, fromStatusId: t.from, toStatusId: t.to })));
-      }),
-    ),
+      });
+    }),
 
-  updateSettings: adminProcedure.input(z.object({ projectId: id, settings: settingsInput })).mutation(async ({ ctx, input }) => {
+  updateSettings: memberProcedure.input(z.object({ projectId: id, settings: settingsInput })).mutation(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "admin");
     const [p] = await ctx.db.select({ settings: project.settings }).from(project).where(eq(project.id, input.projectId));
     if (!p) throw new TRPCError({ code: "NOT_FOUND" });
     const [row] = await ctx.db

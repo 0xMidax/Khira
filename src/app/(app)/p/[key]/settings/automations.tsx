@@ -43,7 +43,7 @@ export function ProjectAutomations({ projectId }: { projectId: string }) {
             <Plus size={14} /> New rule
           </Button>
         </div>
-        <ul className="divide-y divide-line rounded-lg border border-line bg-surface">
+        <ul className="divide-y divide-line card">
           {rules.data?.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-3 px-3 py-2">
               <input type="checkbox" checked={r.enabled} aria-label={`Enable ${r.name}`} onChange={(e) => save.mutate({ ...r, enabled: e.target.checked })} />
@@ -306,7 +306,7 @@ function Templates({ projectId }: { projectId: string }) {
     <section>
       <h2 className="mb-1 font-semibold">Templates & recurring issues</h2>
       <p className="mb-3 text-[13px] text-muted">Save an issue shape (with a checklist that becomes subtasks) and create it on demand or on a schedule. Use {"{{date}}"} in the title for today’s date.</p>
-      <ul className="mb-3 divide-y divide-line rounded-lg border border-line bg-surface empty:hidden">
+      <ul className="mb-3 divide-y divide-line card empty:hidden">
         {list.data?.map((t) => (
           <li key={t.id} className="flex flex-wrap items-center gap-3 px-3 py-2">
             <span className="min-w-0 flex-1">
@@ -329,7 +329,7 @@ function Templates({ projectId }: { projectId: string }) {
         ))}
       </ul>
       <form
-        className="space-y-2 rounded-lg border border-line bg-surface p-3"
+        className="space-y-2 card p-3"
         onSubmit={(e) => {
           e.preventDefault();
           const f = new FormData(e.currentTarget);

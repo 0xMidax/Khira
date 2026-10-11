@@ -1,7 +1,7 @@
 "use client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { Button, cn, IssueKey } from "@/components/ui";
+import { Button, EmptyState, cn, IssueKey } from "@/components/ui";
 import { useTRPC } from "@/trpc/react";
 
 const REASON = { assigned: "assigned you", mentioned: "mentioned you", watching: "updated an issue you watch" } as const;
@@ -18,11 +18,11 @@ export default function Inbox() {
   return (
     <main className="mx-auto max-w-3xl px-4 py-8 md:px-8">
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Notifications</h1>
+        <h1 className="page-title">Notifications</h1>
         {unread > 0 && <Button onClick={() => markRead.mutate({})}>Mark all as read</Button>}
       </div>
-      {list.data?.length === 0 && <p className="text-muted">You’re all caught up. Mentions, assignments and updates to issues you watch show up here.</p>}
-      <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface empty:hidden">
+      {list.data?.length === 0 && <EmptyState title="You’re all caught up">Mentions, assignments and updates to issues you watch show up here.</EmptyState>}
+      <ul className="divide-y divide-line overflow-hidden card empty:hidden">
         {list.data?.map((n) => (
           <li key={n.id} className={cn(!n.readAt && "bg-accent-soft/40")}>
             <Link href={n.issueKey ? `/i/${n.issueKey}` : "#"} onClick={() => !n.readAt && markRead.mutate({ ids: [n.id] })} className="flex gap-3 px-4 py-3 hover:bg-sunken">

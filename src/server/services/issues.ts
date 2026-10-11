@@ -19,6 +19,7 @@ import {
   workflowStatus,
   workflowTransition,
 } from "../db/schema";
+import { usersWithAccess } from "../access";
 import { dispatchActivities } from "./events";
 
 type Reason = "assigned" | "mentioned" | "watching";
@@ -49,11 +50,11 @@ export async function logActivity(tx: Tx, values: typeof activity.$inferInsert) 
 
 // ---------- helpers ----------
 
-async function notify(tx: Tx, activityId: string, actorId: string, recipients: Map<string, Reason>) {
+async function notify(tx: Tx, projectId: string, activityId: string, actorId: string, recipients: Map<string, Reason>) {
   recipients.delete(actorId);
   if (!recipients.size) return;
-  // Mention ids come from user-written text; drop unknown ones so a crafted body can't hit the FK.
-  const known = new Set((await tx.select({ id: user.id }).from(user).where(inArray(user.id, [...recipients.keys()]))).map((u) => u.id));
+  // Only people who can see the project (mention ids are user-written, so this also drops unknown ids before they hit the FK).
+  const known = new Set(await usersWithAccess(tx, projectId, [...recipients.keys()]));
   for (const id of recipients.keys()) if (!known.has(id)) recipients.delete(id);
   if (!recipients.size) return;
   await tx.insert(notification).values([...recipients].map(([userId, reason]) => ({ userId, activityId, reason })));
@@ -199,7 +200,7 @@ export async function createIssue(tx: Tx, actorId: string, input: IssueCreateInp
   const recipients = new Map<string, Reason>();
   for (const id of parseMentions(row.description)) recipients.set(id, "mentioned");
   if (row.assigneeId) recipients.set(row.assigneeId, "assigned");
-  await notify(tx, act.id, actorId, recipients);
+  await notify(tx, p.id, act.id, actorId, recipients);
   return row;
 }
 
@@ -267,7 +268,7 @@ export async function updateIssue(tx: Tx, actorId: string, input: IssueUpdateInp
   for (const id of await watchers(tx, cur.id)) recipients.set(id, "watching");
   if (diff.description) for (const id of parseMentions(String(diff.description.to))) recipients.set(id, "mentioned");
   if (diff.assigneeId && row.assigneeId) recipients.set(row.assigneeId, "assigned");
-  await notify(tx, act.id, actorId, recipients);
+  await notify(tx, cur.projectId, act.id, actorId, recipients);
   await watch(tx, cur.id, [row.assigneeId]);
   return row;
 }
@@ -328,7 +329,7 @@ export async function addComment(tx: Tx, actorId: string, issueId: string, body:
   const recipients = new Map<string, Reason>();
   for (const id of await watchers(tx, issueId)) recipients.set(id, "watching");
   for (const id of parseMentions(body)) recipients.set(id, "mentioned");
-  await notify(tx, act.id, actorId, recipients);
+  await notify(tx, i.projectId, act.id, actorId, recipients);
   await watch(tx, issueId, [actorId]);
   return c;
 }

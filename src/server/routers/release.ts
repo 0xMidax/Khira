@@ -41,9 +41,21 @@ export function draftNotes(name: string, items: { key: string; title: string; ty
   return lines.join("\n").trim();
 }
 
+async function releaseFor(
+  ctx: { db: typeof import("../db").db; requireProject: (projectId: string, need: "read" | "write" | "admin") => Promise<unknown> },
+  releaseId: string,
+  need: "read" | "write",
+) {
+  const [r] = await ctx.db.select().from(release).where(eq(release.id, releaseId));
+  if (!r) throw new TRPCError({ code: "NOT_FOUND" });
+  await ctx.requireProject(r.projectId, need);
+  return r;
+}
+
 export const releaseRouter = router({
-  list: authedProcedure.input(z.object({ projectId: id })).query(({ ctx, input }) =>
-    ctx.db
+  list: authedProcedure.input(z.object({ projectId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "read");
+    return ctx.db
       .select({
         release,
         total: sql<number>`(select count(*)::int from ${issue} i where i.release_id = ${release.id} and i.deleted_at is null)`,
@@ -51,18 +63,18 @@ export const releaseRouter = router({
       })
       .from(release)
       .where(eq(release.projectId, input.projectId))
-      .orderBy(sql`${release.releasedAt} is not null`, desc(release.createdAt)),
-  ),
+      .orderBy(sql`${release.releasedAt} is not null`, desc(release.createdAt));
+  }),
 
   get: authedProcedure.input(z.object({ id })).query(async ({ ctx, input }) => {
-    const [r] = await ctx.db.select().from(release).where(eq(release.id, input.id));
-    if (!r) throw new TRPCError({ code: "NOT_FOUND" });
+    const r = await releaseFor(ctx, input.id, "read");
     return { ...r, issues: await releaseIssues(ctx.db, r.id) };
   }),
 
   save: memberProcedure
     .input(z.object({ projectId: id, id: id.optional(), name: z.string().trim().min(1).max(60), description: z.string().max(2000).nullish(), releaseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish() }))
     .mutation(async ({ ctx, input: { id: rid, projectId, ...f } }) => {
+      await ctx.requireProject(projectId, "write");
       if (rid) {
         const [r] = await ctx.db.update(release).set(f).where(and(eq(release.id, rid), eq(release.projectId, projectId))).returning();
         if (!r) throw new TRPCError({ code: "NOT_FOUND" });
@@ -74,16 +86,17 @@ export const releaseRouter = router({
     }),
 
   setNotes: memberProcedure.input(z.object({ id, notes: z.string().max(50_000) })).mutation(async ({ ctx, input }) => {
+    await releaseFor(ctx, input.id, "write");
     await ctx.db.update(release).set({ notes: input.notes }).where(eq(release.id, input.id));
   }),
 
   /** Mark released. Notes default to a generated changelog when empty. */
-  ship: memberProcedure.input(z.object({ id, publish: z.boolean().default(false) })).mutation(({ ctx, input }) =>
-    write(ctx.db, async (tx) => {
-      const [r] = await tx.select().from(release).where(eq(release.id, input.id));
-      if (!r) throw new TRPCError({ code: "NOT_FOUND" });
-      if (r.releasedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Already released." });
-      const notes = r.notes?.trim() ? r.notes : draftNotes(r.name, await releaseIssues(ctx.db, r.id));
+  ship: memberProcedure.input(z.object({ id, publish: z.boolean().default(false) })).mutation(async ({ ctx, input }) => {
+    const r = await releaseFor(ctx, input.id, "write");
+    if (r.releasedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Already released." });
+    // Read before the transaction: a second connection inside it would deadlock a single-connection DB.
+    const notes = r.notes?.trim() ? r.notes : draftNotes(r.name, await releaseIssues(ctx.db, r.id));
+    return write(ctx.db, async (tx) => {
       const [row] = await tx
         .update(release)
         .set({ releasedAt: new Date(), notes, publicSlug: input.publish ? (r.publicSlug ?? randomToken(10)) : r.publicSlug })
@@ -91,12 +104,11 @@ export const releaseRouter = router({
         .returning();
       await logActivity(tx, { actorId: ctx.user.id, projectId: r.projectId, verb: "released", diff: { release: { from: null, to: r.name } } });
       return row;
-    }),
-  ),
+    });
+  }),
 
   setPublic: memberProcedure.input(z.object({ id, public: z.boolean() })).mutation(async ({ ctx, input }) => {
-    const [r] = await ctx.db.select().from(release).where(eq(release.id, input.id));
-    if (!r) throw new TRPCError({ code: "NOT_FOUND" });
+    const r = await releaseFor(ctx, input.id, "write");
     const [row] = await ctx.db
       .update(release)
       .set({ publicSlug: input.public ? (r.publicSlug ?? randomToken(10)) : null })
@@ -106,6 +118,7 @@ export const releaseRouter = router({
   }),
 
   delete: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
+    await releaseFor(ctx, input.id, "write");
     await ctx.db.delete(release).where(and(eq(release.id, input.id), isNull(release.releasedAt)));
   }),
 });

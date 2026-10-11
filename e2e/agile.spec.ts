@@ -70,10 +70,10 @@ test("sprint planning, search, reports, retro and settings", async ({ page }) =>
   await page.getByRole("button", { name: "Create dashboard" }).click();
   await expect(page.getByRole("heading", { name: "Open work by status" })).toBeVisible();
 
-  // Timeline and calendar load
-  await page.goto("/timeline");
-  await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
-  await page.goto("/calendar");
+  // Timeline and calendar tabs load on a project
+  await page.goto("/p/DEMO?view=timeline");
+  await expect(page.getByText("Bars run from start date to due date")).toBeVisible();
+  await page.goto("/p/DEMO?view=calendar");
   await expect(page.getByRole("button", { name: "Today" })).toBeVisible();
 
   expect(errors).toEqual([]);

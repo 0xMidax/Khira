@@ -4,12 +4,15 @@ import superjson from "superjson";
 import { ZodError } from "zod";
 import { auth } from "./auth";
 import { db } from "./db";
+import { type Access, assertRole, loadAccess, projectOfIssue } from "./access";
 import { hit } from "./ratelimit";
 
 export async function createContext(opts: { headers: Headers }) {
   const session = await auth.api.getSession({ headers: opts.headers });
   // Defense in depth: never treat an unverified address as a team member.
-  return { db, user: session?.user.emailVerified ? session.user : null };
+  // Deactivated accounts lose access immediately, even if a session cookie is still around.
+  const u = session?.user;
+  return { db, user: u?.emailVerified && !u.deactivatedAt ? u : null };
 }
 export type Context = Awaited<ReturnType<typeof createContext>>;
 
@@ -32,7 +35,23 @@ export const authedProcedure = t.procedure.use(async ({ ctx, next, type, path })
     if (!(await hit(`${ai ? "ai" : "w"}:${ctx.user.id}`, ai ? 30 : 240, 60)))
       throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Slow down a little and try again in a minute." });
   }
-  return next({ ctx: { ...ctx, user: { ...ctx.user, role: ctx.user.role as Role } } });
+  const u = { ...ctx.user, role: ctx.user.role as Role };
+  // Project access, loaded at most once per request and only if a procedure asks.
+  let loaded: Promise<Access> | undefined;
+  const access = () => (loaded ??= loadAccess(ctx.db, u));
+  return next({
+    ctx: {
+      ...ctx,
+      user: u,
+      access,
+      requireProject: async (projectId: string, need: "read" | "write" | "admin" = "read") => assertRole(await access(), projectId, need),
+      requireIssue: async (issueId: string, need: "read" | "write" | "admin" = "read") => {
+        const projectId = await projectOfIssue(ctx.db, issueId);
+        assertRole(await access(), projectId, need);
+        return projectId;
+      },
+    },
+  });
 });
 
 /** Members and admins — anything that writes. */

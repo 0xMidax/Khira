@@ -3,16 +3,15 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { Button, cn, IssueKey, Select } from "@/components/ui";
+import { Button, cn, IssueKey } from "@/components/ui";
 import { useTRPC } from "@/trpc/react";
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-export default function CalendarPage() {
+/** Due dates of one project by month (a tab on the project page). */
+export function CalendarView({ projectId }: { projectId: string }) {
   const trpc = useTRPC();
-  const projects = useQuery(trpc.project.list.queryOptions());
-  const [projectId, setProjectId] = useState("");
   const [month, setMonth] = useState(() => {
     const n = new Date();
     return new Date(Date.UTC(n.getFullYear(), n.getMonth(), 1));
@@ -20,24 +19,16 @@ export default function CalendarPage() {
   const first = new Date(month);
   const gridStart = new Date(first.getTime() - ((first.getUTCDay() + 6) % 7) * 86_400_000);
   const days = Array.from({ length: 42 }, (_, i) => new Date(gridStart.getTime() + i * 86_400_000));
-  const items = useQuery(trpc.dashboard.dated.queryOptions({ projectId: projectId || undefined, from: iso(days[0]), to: iso(days[41]) }));
+  const items = useQuery(trpc.dashboard.dated.queryOptions({ projectId, from: iso(days[0]), to: iso(days[41]) }));
   const byDay = new Map<string, NonNullable<typeof items.data>>();
   for (const i of items.data ?? []) if (i.dueDate) byDay.set(i.dueDate, [...(byDay.get(i.dueDate) ?? []), i]);
-  const today = iso(new Date());
+  const today = new Date().toLocaleDateString("en-CA"); // local YYYY-MM-DD, not UTC
   const shift = (n: number) => setMonth(new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + n, 1)));
 
   return (
-    <main className="px-4 py-6 md:px-8">
+    <div className="px-4 pb-6 md:px-6">
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <h1 className="mr-auto text-2xl font-semibold">{month.toLocaleString(undefined, { month: "long", year: "numeric", timeZone: "UTC" })}</h1>
-        <Select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="w-44" aria-label="Project">
-          <option value="">All projects</option>
-          {projects.data?.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </Select>
+        <h2 className="mr-auto text-xl">{month.toLocaleString(undefined, { month: "long", year: "numeric", timeZone: "UTC" })}</h2>
         <Button size="sm" aria-label="Previous month" onClick={() => shift(-1)}>
           <ChevronLeft size={15} />
         </Button>
@@ -79,6 +70,6 @@ export default function CalendarPage() {
           );
         })}
       </div>
-    </main>
+    </div>
   );
 }

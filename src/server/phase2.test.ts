@@ -122,7 +122,7 @@ describe("workflow rules", () => {
     await admin.issue.update({ id: i.id, statusId: doing.id });
     await admin.workflow.setTransitions({ projectId: p.id, transitions: [] });
     await admin.issue.update({ id: i.id, statusId: done.id });
-    await expect(bob.workflow.setTransitions({ projectId: p.id, transitions: [] })).rejects.toThrow(/Admins only/);
+    await expect(bob.workflow.setTransitions({ projectId: p.id, transitions: [] })).rejects.toThrow(/project admins/);
   });
 
   it("blocks done while subtasks are open, when enabled", async () => {

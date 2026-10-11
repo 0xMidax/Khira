@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useShell } from "@/components/shell";
+import { TwoFactorSection } from "@/components/two-factor";
 import { Button, Input, Select } from "@/components/ui";
 import { useTRPC } from "@/trpc/react";
 
@@ -23,7 +25,7 @@ export default function Profile() {
   const revoke = useMutation(trpc.integration.revokeToken.mutationOptions({ onSuccess: () => qc.invalidateQueries({ queryKey: trpc.integration.tokens.queryKey() }) }));
   const [newToken, setNewToken] = useState<string | null>(null);
   const [pushState, setPushState] = useState<"unsupported" | "off" | "on" | "denied">("off");
-  const vapid = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  const vapid = useShell().config.vapidPublicKey;
 
   useEffect(() => {
     if (!("serviceWorker" in navigator) || !("PushManager" in window) || !vapid) return setPushState("unsupported");
@@ -45,7 +47,7 @@ export default function Profile() {
   if (!s.data) return <p className="p-8 text-muted">Loading…</p>;
   return (
     <main className="mx-auto max-w-2xl space-y-10 px-4 py-8 md:px-8">
-      <h1 className="text-2xl font-semibold">Your settings</h1>
+      <h1 className="page-title">Your settings</h1>
 
       <section className="space-y-3">
         <h2 className="font-semibold">Notifications</h2>
@@ -95,6 +97,8 @@ export default function Profile() {
         </form>
       </section>
 
+      <TwoFactorSection />
+
       <section className="space-y-3">
         <h2 className="font-semibold">API tokens</h2>
         <p className="text-[13px] text-muted">
@@ -109,7 +113,7 @@ export default function Profile() {
             <span className="text-muted">You won’t see it again.</span>
           </div>
         )}
-        <ul className="divide-y divide-line rounded-lg border border-line bg-surface empty:hidden">
+        <ul className="divide-y divide-line card empty:hidden">
           {tokens.data?.map((t) => (
             <li key={t.id} className="flex items-center gap-3 px-3 py-2 text-[13px]">
               <span className="font-medium">{t.name}</span>

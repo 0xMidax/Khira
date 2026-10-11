@@ -19,7 +19,7 @@ type Row = {
 export function IssueResults({ rows, empty }: { rows: Row[]; empty?: string }) {
   if (!rows.length) return <p className="py-8 text-center text-muted">{empty ?? "No issues match."}</p>;
   return (
-    <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface">
+    <ul className="divide-y divide-line overflow-hidden card">
       {rows.map((r) => (
         <li key={r.id}>
           <Link href={`/i/${r.key}`} className="flex items-center gap-3 px-3 py-2 hover:bg-sunken">

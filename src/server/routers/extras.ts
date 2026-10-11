@@ -20,9 +20,10 @@ import {
   workflowStatus,
 } from "../db/schema";
 import { isPushEndpoint } from "../integrations/push";
+import { scope } from "../access";
 import { logActivity, write } from "../services/issues";
 import { downloadUrl, MAX_UPLOAD_BYTES, mimeAllowed, storedSize, uploadUrl } from "../storage";
-import { adminProcedure, authedProcedure, memberProcedure, router } from "../trpc";
+import { authedProcedure, memberProcedure, router } from "../trpc";
 
 const id = z.string().uuid();
 const other = alias(issue, "other");
@@ -38,10 +39,12 @@ async function issueOr404(db: typeof import("../db").db, issueId: string) {
 export const issueExtrasRouter = router({
   // ---- watching ----
   watching: authedProcedure.input(z.object({ issueId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.issueId, "read");
     const rows = await ctx.db.select({ userId: watcher.userId }).from(watcher).where(eq(watcher.issueId, input.issueId));
     return { count: rows.length, me: rows.some((r) => r.userId === ctx.user.id) };
   }),
   setWatching: authedProcedure.input(z.object({ issueId: id, watching: z.boolean() })).mutation(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.issueId, "read"); // viewers may follow along too
     await issueOr404(ctx.db, input.issueId);
     if (input.watching) await ctx.db.insert(watcher).values({ issueId: input.issueId, userId: ctx.user.id }).onConflictDoNothing();
     else await ctx.db.delete(watcher).where(and(eq(watcher.issueId, input.issueId), eq(watcher.userId, ctx.user.id)));
@@ -49,6 +52,8 @@ export const issueExtrasRouter = router({
 
   // ---- links ----
   links: authedProcedure.input(z.object({ issueId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.issueId, "read");
+    const reach = scope(await ctx.access(), other.projectId); // never reveal linked issues in projects you can't see
     const sel = (dir: "out" | "in") =>
       ctx.db
         .select({
@@ -64,7 +69,7 @@ export const issueExtrasRouter = router({
         .innerJoin(other, eq(other.id, dir === "out" ? issueLink.toId : issueLink.fromId))
         .innerJoin(otherProject, eq(otherProject.id, other.projectId))
         .innerJoin(otherStatus, eq(otherStatus.id, other.statusId))
-        .where(and(eq(dir === "out" ? issueLink.fromId : issueLink.toId, input.issueId), isNull(other.deletedAt)));
+        .where(and(eq(dir === "out" ? issueLink.fromId : issueLink.toId, input.issueId), isNull(other.deletedAt), reach));
     const [out, inc] = await Promise.all([sel("out"), sel("in")]);
     const INVERSE = { blocks: "is blocked by", relates: "relates to", duplicates: "is duplicated by", clones: "is cloned by" } as const;
     const FORWARD = { blocks: "blocks", relates: "relates to", duplicates: "duplicates", clones: "clones" } as const;
@@ -72,53 +77,60 @@ export const issueExtrasRouter = router({
   }),
   addLink: memberProcedure
     .input(z.object({ issueId: id, type: z.enum(["blocks", "blocked_by", "relates", "duplicates", "clones"]), target: issueKey }))
-    .mutation(({ ctx, input }) =>
-      write(ctx.db, async (tx) => {
-        const src = await issueOr404(ctx.db, input.issueId);
-        const [t] = await tx
-          .select({ id: issue.id })
-          .from(issue)
-          .innerJoin(project, eq(project.id, issue.projectId))
-          .where(and(eq(project.key, input.target.key), eq(issue.number, input.target.number), isNull(issue.deletedAt)));
-        if (!t) throw new TRPCError({ code: "NOT_FOUND", message: "No issue with that key." });
-        if (t.id === src.id) throw new TRPCError({ code: "BAD_REQUEST", message: "An issue can't link to itself." });
-        const [fromId, toId, type] = input.type === "blocked_by" ? [t.id, src.id, "blocks" as const] : [src.id, t.id, input.type];
+    .mutation(async ({ ctx, input }) => {
+      await ctx.requireIssue(input.issueId, "write");
+      const src = await issueOr404(ctx.db, input.issueId);
+      const [t] = await ctx.db
+        .select({ id: issue.id, projectId: issue.projectId })
+        .from(issue)
+        .innerJoin(project, eq(project.id, issue.projectId))
+        .where(and(eq(project.key, input.target.key), eq(issue.number, input.target.number), isNull(issue.deletedAt)));
+      if (!t || !(await ctx.access()).roleIn(t.projectId)) throw new TRPCError({ code: "NOT_FOUND", message: "No issue with that key." });
+      if (t.id === src.id) throw new TRPCError({ code: "BAD_REQUEST", message: "An issue can't link to itself." });
+      const [fromId, toId, type] = input.type === "blocked_by" ? [t.id, src.id, "blocks" as const] : [src.id, t.id, input.type];
+      // All lookups happen before the transaction: a second connection inside it would deadlock a single-connection DB.
+      await write(ctx.db, async (tx) => {
         await tx.insert(issueLink).values({ fromId, toId, type }).onConflictDoNothing();
         await logActivity(tx, { actorId: ctx.user.id, projectId: src.projectId, issueId: src.id, verb: "linked", diff: { link: { from: null, to: `${input.type} ${input.target.key}-${input.target.number}` } } });
-      }),
-    ),
+      });
+    }),
   removeLink: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
+    const [l] = await ctx.db.select({ fromId: issueLink.fromId }).from(issueLink).where(eq(issueLink.id, input.id));
+    if (!l) return;
+    await ctx.requireIssue(l.fromId, "write");
     await ctx.db.delete(issueLink).where(eq(issueLink.id, input.id));
   }),
 
-  github: authedProcedure.input(z.object({ issueId: id })).query(({ ctx, input }) =>
-    ctx.db.select().from(githubLink).where(eq(githubLink.issueId, input.issueId)).orderBy(asc(githubLink.kind), asc(githubLink.updatedAt)),
-  ),
+  github: authedProcedure.input(z.object({ issueId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.issueId, "read");
+    return ctx.db.select().from(githubLink).where(eq(githubLink.issueId, input.issueId)).orderBy(asc(githubLink.kind), asc(githubLink.updatedAt));
+  }),
 
   // ---- reactions ----
   react: authedProcedure.input(z.object({ commentId: id, emoji: z.enum(["👍", "🎉", "❤️", "👀", "🚀", "😕"]) })).mutation(async ({ ctx, input }) => {
+    const [c] = await ctx.db.select({ id: comment.id, issueId: comment.issueId }).from(comment).where(and(eq(comment.id, input.commentId), isNull(comment.deletedAt)));
+    if (!c) throw new TRPCError({ code: "NOT_FOUND" });
+    await ctx.requireIssue(c.issueId, "read"); // anyone who can read the thread can react
     const where = and(eq(commentReaction.commentId, input.commentId), eq(commentReaction.userId, ctx.user.id), eq(commentReaction.emoji, input.emoji));
     const [existing] = await ctx.db.select().from(commentReaction).where(where);
     if (existing) await ctx.db.delete(commentReaction).where(where);
-    else {
-      const [c] = await ctx.db.select({ id: comment.id }).from(comment).where(and(eq(comment.id, input.commentId), isNull(comment.deletedAt)));
-      if (!c) throw new TRPCError({ code: "NOT_FOUND" });
-      await ctx.db.insert(commentReaction).values({ ...input, userId: ctx.user.id });
-    }
+    else await ctx.db.insert(commentReaction).values({ ...input, userId: ctx.user.id });
   }),
-  reactions: authedProcedure.input(z.object({ issueId: id })).query(async ({ ctx, input }) =>
-    ctx.db
+  reactions: authedProcedure.input(z.object({ issueId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.issueId, "read");
+    return ctx.db
       .select({ commentId: commentReaction.commentId, emoji: commentReaction.emoji, userId: commentReaction.userId })
       .from(commentReaction)
       .innerJoin(comment, eq(comment.id, commentReaction.commentId))
-      .where(eq(comment.issueId, input.issueId)),
-  ),
+      .where(eq(comment.issueId, input.issueId));
+  }),
 
   // ---- custom fields ----
-  fields: authedProcedure.input(z.object({ projectId: id })).query(({ ctx, input }) =>
-    ctx.db.select().from(customField).where(eq(customField.projectId, input.projectId)).orderBy(asc(customField.position), asc(customField.name)),
-  ),
-  saveField: adminProcedure
+  fields: authedProcedure.input(z.object({ projectId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "read");
+    return ctx.db.select().from(customField).where(eq(customField.projectId, input.projectId)).orderBy(asc(customField.position), asc(customField.name));
+  }),
+  saveField: memberProcedure
     .input(
       z.object({
         projectId: id,
@@ -129,6 +141,7 @@ export const issueExtrasRouter = router({
       }),
     )
     .mutation(async ({ ctx, input: { id: fieldId, ...f } }) => {
+      await ctx.requireProject(f.projectId, "admin");
       if (f.type === "select" && !f.options?.length) throw new TRPCError({ code: "BAD_REQUEST", message: "A select field needs at least one option." });
       if (fieldId) {
         const [row] = await ctx.db.update(customField).set(f).where(and(eq(customField.id, fieldId), eq(customField.projectId, f.projectId))).returning();
@@ -137,15 +150,20 @@ export const issueExtrasRouter = router({
       const [row] = await ctx.db.insert(customField).values(f).returning();
       return row;
     }),
-  deleteField: adminProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
+  deleteField: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
+    const [f] = await ctx.db.select({ projectId: customField.projectId }).from(customField).where(eq(customField.id, input.id));
+    if (!f) return;
+    await ctx.requireProject(f.projectId, "admin");
     await ctx.db.delete(customField).where(eq(customField.id, input.id));
   }),
-  values: authedProcedure.input(z.object({ issueId: id })).query(({ ctx, input }) =>
-    ctx.db.select().from(issueCustomValue).where(eq(issueCustomValue.issueId, input.issueId)),
-  ),
+  values: authedProcedure.input(z.object({ issueId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.issueId, "read");
+    return ctx.db.select().from(issueCustomValue).where(eq(issueCustomValue.issueId, input.issueId));
+  }),
   setValue: memberProcedure
     .input(z.object({ issueId: id, fieldId: id, value: z.union([z.string().max(2000), z.number()]).nullable() }))
     .mutation(async ({ ctx, input }) => {
+      await ctx.requireIssue(input.issueId, "write");
       const i = await issueOr404(ctx.db, input.issueId);
       const [f] = await ctx.db.select().from(customField).where(and(eq(customField.id, input.fieldId), eq(customField.projectId, i.projectId)));
       if (!f) throw new TRPCError({ code: "BAD_REQUEST", message: "That field isn't part of this project." });
@@ -165,40 +183,47 @@ export const issueExtrasRouter = router({
     }),
 
   // ---- attachments ----
-  attachments: authedProcedure.input(z.object({ issueId: id })).query(({ ctx, input }) =>
-    ctx.db
+  attachments: authedProcedure.input(z.object({ issueId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.issueId, "read");
+    return ctx.db
       .select()
       .from(attachment)
       .where(and(eq(attachment.issueId, input.issueId), eq(attachment.uploaded, true)))
-      .orderBy(asc(attachment.createdAt)),
-  ),
+      .orderBy(asc(attachment.createdAt));
+  }),
   createUpload: memberProcedure
     .input(z.object({ issueId: id, name: z.string().trim().min(1).max(200), mime: z.string().max(120), size: z.number().int().min(1).max(MAX_UPLOAD_BYTES) }))
     .mutation(async ({ ctx, input }) => {
+      await ctx.requireIssue(input.issueId, "write");
       await issueOr404(ctx.db, input.issueId);
       if (!mimeAllowed(input.mime)) throw new TRPCError({ code: "BAD_REQUEST", message: "That file type isn't allowed. Use images, PDFs, text, office docs, zip or video." });
       const storageKey = `${input.issueId}/${randomToken(12)}-${input.name.replace(/[^\w.-]+/g, "_").slice(-80)}`;
       const [a] = await ctx.db.insert(attachment).values({ ...input, storageKey, uploaderId: ctx.user.id }).returning();
       return { id: a.id, ...(await uploadUrl(storageKey, input.mime)) };
     }),
-  confirmUpload: memberProcedure.input(z.object({ id })).mutation(({ ctx, input }) =>
-    write(ctx.db, async (tx) => {
-      const [a] = await tx.select().from(attachment).where(and(eq(attachment.id, input.id), eq(attachment.uploaderId, ctx.user.id)));
-      if (!a) throw new TRPCError({ code: "NOT_FOUND" });
-      const size = await storedSize(a.storageKey);
-      if (size === null) throw new TRPCError({ code: "BAD_REQUEST", message: "The upload didn't finish. Try again." });
-      if (size > MAX_UPLOAD_BYTES) throw new TRPCError({ code: "BAD_REQUEST", message: "File is larger than 25 MB." });
+  confirmUpload: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
+    const [a] = await ctx.db.select().from(attachment).where(and(eq(attachment.id, input.id), eq(attachment.uploaderId, ctx.user.id)));
+    if (!a) throw new TRPCError({ code: "NOT_FOUND" });
+    await ctx.requireIssue(a.issueId, "write");
+    const i = await issueOr404(ctx.db, a.issueId);
+    const size = await storedSize(a.storageKey);
+    if (size === null) throw new TRPCError({ code: "BAD_REQUEST", message: "The upload didn't finish. Try again." });
+    if (size > MAX_UPLOAD_BYTES) throw new TRPCError({ code: "BAD_REQUEST", message: "File is larger than 25 MB." });
+    await write(ctx.db, async (tx) => {
       await tx.update(attachment).set({ uploaded: true, size }).where(eq(attachment.id, a.id));
-      const i = await issueOr404(ctx.db, a.issueId);
       await logActivity(tx, { actorId: ctx.user.id, projectId: i.projectId, issueId: i.id, verb: "attached", diff: { attachment: { from: null, to: a.name } } });
-    }),
-  ),
+    });
+  }),
   attachmentUrl: authedProcedure.input(z.object({ id })).query(async ({ ctx, input }) => {
     const [a] = await ctx.db.select().from(attachment).where(and(eq(attachment.id, input.id), eq(attachment.uploaded, true)));
     if (!a) throw new TRPCError({ code: "NOT_FOUND" });
+    await ctx.requireIssue(a.issueId, "read");
     return downloadUrl(a.storageKey, a.name, a.mime);
   }),
   deleteAttachment: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
+    const [found] = await ctx.db.select({ issueId: attachment.issueId }).from(attachment).where(eq(attachment.id, input.id));
+    if (!found) throw new TRPCError({ code: "NOT_FOUND" });
+    await ctx.requireIssue(found.issueId, "write");
     const own = ctx.user.role === "admin" ? undefined : eq(attachment.uploaderId, ctx.user.id);
     // ponytail: the stored object is left behind (cheap); add a cleanup cron if storage cost matters.
     const [a] = await ctx.db.delete(attachment).where(and(eq(attachment.id, input.id), own)).returning();

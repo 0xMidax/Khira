@@ -31,6 +31,10 @@ Keyboard shortcuts: <kbd>C</kbd> new issue · <kbd>⌘K</kbd> or <kbd>/</kbd> se
 | `pnpm db:generate` | Create a migration after you change `src/server/db/schema.ts` |
 | `pnpm db:migrate` | Apply migrations |
 
+## Self-host with Docker
+
+`docker compose up -d --build` runs the app, Postgres, live updates and the job scheduler on your own server. Full guide: [docs/self-hosting.md](docs/self-hosting.md).
+
 ## Deploy (Vercel + Neon)
 
 1. Create a Neon project and copy the **pooled** connection string.
@@ -64,4 +68,4 @@ Create a token under **Your settings → API tokens**, then call `/api/v1` with 
 
 ## Integrations
 
-Each one turns on when its env vars from `.env.example` are set. Webhook URLs: GitHub `/api/webhooks/github`, Slack `/api/slack/commands`, `/api/slack/interactivity` (message shortcut callback ID `create_issue`) and `/api/slack/events`, Postmark inbound `/api/webhooks/email`.
+Admins connect Slack, Discord, email and GitHub from the **Integrations** page (secrets are stored encrypted); the env vars in `.env.example` still work as a fallback. GitHub moves issues automatically: branch created → In Progress (and assigned to the developer), PR opened → In Review, PR merged → Done, configurable per project and forward-only. Webhook URLs: GitHub `/api/webhooks/github`, Slack `/api/slack/commands`, `/api/slack/interactivity` (message shortcut callback ID `create_issue`) and `/api/slack/events`, Postmark inbound `/api/webhooks/email`.

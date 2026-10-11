@@ -14,8 +14,9 @@ export function isPushEndpoint(raw: string) {
   }
 }
 
-const enabled = !!(process.env.VAPID_PRIVATE_KEY && process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY);
-if (enabled) webpush.setVapidDetails(process.env.VAPID_SUBJECT ?? "mailto:admin@example.com", process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!, process.env.VAPID_PRIVATE_KEY!);
+const vapidPublic = process.env.VAPID_PUBLIC_KEY ?? process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+const enabled = !!(process.env.VAPID_PRIVATE_KEY && vapidPublic);
+if (enabled) webpush.setVapidDetails(process.env.VAPID_SUBJECT ?? "mailto:admin@example.com", vapidPublic!, process.env.VAPID_PRIVATE_KEY!);
 
 export async function pushTo(userIds: string[], payload: { title: string; body: string; url: string }) {
   if (!enabled || !userIds.length) return;

@@ -1,6 +1,7 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { FocusBar, FocusButton, useFocus } from "@/components/focus-timer";
 import { useShell } from "@/components/shell";
 import { Button, cn, IssueKey, Kbd, PriorityIcon, TypeIcon } from "@/components/ui";
@@ -11,6 +12,8 @@ export default function MyWork() {
   const { me, openCreate } = useShell();
   const q = useQuery(trpc.issue.mine.queryOptions());
   const focus = useFocus();
+  const [now, setNow] = useState<Date | null>(null);
+  useEffect(() => setNow(new Date()), []);
   const today = new Date().toISOString().slice(0, 10);
   const groups = [
     { title: "Overdue", items: q.data?.filter((i) => i.dueDate && i.dueDate < today) ?? [] },
@@ -20,8 +23,9 @@ export default function MyWork() {
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 md:px-8">
-      <p className="mb-1 text-[13px] font-medium text-accent">{new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>
-      <h1 className="text-[2rem] leading-tight">Good to see you, {me.name.split(" ")[0]}</h1>
+      {/* The date depends on the viewer's locale and timezone, so render it only in the browser (avoids a hydration mismatch). */}
+      <p className="mb-1 min-h-5 text-[13px] font-medium text-accent">{now?.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>
+      <h1 className="page-title">Good to see you, {me.name.split(" ")[0]}</h1>
       <div className="mt-3 mb-8 flex flex-wrap items-center gap-2 text-[13px]">
         {q.data ? (
           q.data.length ? (
@@ -59,7 +63,7 @@ export default function MyWork() {
             <h2 className={cn("mb-2 text-lg", g.title === "Overdue" && "text-danger")}>
               {g.title} <span className="font-normal text-muted">{g.items.length}</span>
             </h2>
-            <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface shadow-[0_1px_2px_rgb(19_33_26/0.05)]">
+            <ul className="divide-y divide-line overflow-hidden card">
               {g.items.map((i) => (
                 <li key={i.id}>
                   <Link href={`/i/${i.key}`} className="group flex items-center gap-3 px-3 py-2.5 hover:bg-sunken">

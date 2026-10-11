@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { activity, issue, project, sprint, user, workflowStatus, worklog } from "../db/schema";
+import { scope as reachable } from "../access";
 import { authedProcedure, memberProcedure, router } from "../trpc";
 
 const id = z.string().uuid();
@@ -50,6 +51,7 @@ export const statusAt = (timeline: { at: Date; statusId: string }[], t: Date) =>
 export const reportsRouter = router({
   /** Cumulative flow: issues per status for each of the last `days` days. */
   cfd: authedProcedure.input(z.object({ projectId: id, days: z.number().int().min(7).max(180).default(30) })).query(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "read");
     const [statuses, issues] = await Promise.all([
       ctx.db.select().from(workflowStatus).where(eq(workflowStatus.projectId, input.projectId)).orderBy(asc(workflowStatus.position)),
       statusTimelines(ctx.db, input.projectId),
@@ -72,6 +74,7 @@ export const reportsRouter = router({
 
   /** Cycle time = first move into an in-progress status → resolved. Lead time = created → resolved. */
   cycleTime: authedProcedure.input(z.object({ projectId: id, days: z.number().int().min(7).max(365).default(90) })).query(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "read");
     const since = new Date(Date.now() - input.days * DAY);
     const [statuses, issues] = await Promise.all([
       ctx.db.select({ id: workflowStatus.id, category: workflowStatus.category }).from(workflowStatus).where(eq(workflowStatus.projectId, input.projectId)),
@@ -104,7 +107,8 @@ export const reportsRouter = router({
     .query(async ({ ctx, input }) => {
       const since = new Date(Date.now() - (input.days - 1) * DAY);
       since.setUTCHours(0, 0, 0, 0);
-      const scope = input.projectId ? eq(issue.projectId, input.projectId) : undefined;
+      if (input.projectId) await ctx.requireProject(input.projectId, "read");
+      const scope = input.projectId ? eq(issue.projectId, input.projectId) : reachable(await ctx.access());
       const [created, resolved] = await Promise.all([
         ctx.db
           .select({ day: sql<string>`to_char(${issue.createdAt} at time zone 'UTC', 'YYYY-MM-DD')`, n: sql<number>`count(*)::int` })
@@ -126,8 +130,9 @@ export const reportsRouter = router({
     }),
 
   /** Open work per person: issues and points, optionally limited to a sprint. */
-  workload: authedProcedure.input(z.object({ projectId: id.optional(), sprintId: id.optional() })).query(({ ctx, input }) =>
-    ctx.db
+  workload: authedProcedure.input(z.object({ projectId: id.optional(), sprintId: id.optional() })).query(async ({ ctx, input }) => {
+    if (input.projectId) await ctx.requireProject(input.projectId, "read");
+    return ctx.db
       .select({
         userId: issue.assigneeId,
         name: sql<string>`coalesce(${user.name}, 'Unassigned')`,
@@ -148,14 +153,16 @@ export const reportsRouter = router({
           sql`${workflowStatus.category} <> 'done'`,
           input.projectId ? eq(issue.projectId, input.projectId) : undefined,
           input.sprintId ? eq(issue.sprintId, input.sprintId) : undefined,
+          reachable(await ctx.access()),
         ),
       )
       .groupBy(issue.assigneeId, user.name, user.image)
-      .orderBy(desc(sql`count(*)`)),
-  ),
+      .orderBy(desc(sql`count(*)`));
+  }),
 
   /** Points per person per sprint for the heatmap (last 6 sprints + open ones). */
   heatmap: authedProcedure.input(z.object({ projectId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireProject(input.projectId, "read");
     const sprints = await ctx.db
       .select({ id: sprint.id, name: sprint.name, state: sprint.state })
       .from(sprint)
@@ -185,6 +192,7 @@ export const timeRouter = router({
   log: memberProcedure
     .input(z.object({ issueId: id, minutes: z.number().int().min(1).max(24 * 60), note: z.string().max(500).optional(), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }))
     .mutation(async ({ ctx, input }) => {
+      await ctx.requireIssue(input.issueId, "write");
       const [i] = await ctx.db.select({ id: issue.id }).from(issue).where(and(eq(issue.id, input.issueId), isNull(issue.deletedAt)));
       if (!i) throw new TRPCError({ code: "NOT_FOUND" });
       const [w] = await ctx.db
@@ -194,16 +202,20 @@ export const timeRouter = router({
       return w;
     }),
 
-  forIssue: authedProcedure.input(z.object({ issueId: id })).query(({ ctx, input }) =>
-    ctx.db
+  forIssue: authedProcedure.input(z.object({ issueId: id })).query(async ({ ctx, input }) => {
+    await ctx.requireIssue(input.issueId, "read");
+    return ctx.db
       .select({ id: worklog.id, minutes: worklog.minutes, note: worklog.note, day: worklog.day, userId: worklog.userId, userName: user.name })
       .from(worklog)
       .innerJoin(user, eq(user.id, worklog.userId))
       .where(eq(worklog.issueId, input.issueId))
-      .orderBy(desc(worklog.day), desc(worklog.createdAt)),
-  ),
+      .orderBy(desc(worklog.day), desc(worklog.createdAt));
+  }),
 
   remove: memberProcedure.input(z.object({ id })).mutation(async ({ ctx, input }) => {
+    const [entry] = await ctx.db.select({ issueId: worklog.issueId }).from(worklog).where(eq(worklog.id, input.id));
+    if (!entry) throw new TRPCError({ code: "NOT_FOUND" });
+    await ctx.requireIssue(entry.issueId, "write");
     const own = ctx.user.role === "admin" ? undefined : eq(worklog.userId, ctx.user.id);
     const [w] = await ctx.db.delete(worklog).where(and(eq(worklog.id, input.id), own)).returning();
     if (!w) throw new TRPCError({ code: "FORBIDDEN", message: "You can only remove your own time." });
@@ -212,7 +224,7 @@ export const timeRouter = router({
   /** Timesheet: minutes per person per issue per day in a date range. */
   timesheet: authedProcedure
     .input(z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), userId: z.string().optional() }))
-    .query(({ ctx, input }) =>
+    .query(async ({ ctx, input }) =>
       ctx.db
         .select({
           day: worklog.day,
@@ -231,6 +243,7 @@ export const timeRouter = router({
             gte(worklog.day, input.from),
             sql`${worklog.day} <= ${input.to}`,
             input.userId ? eq(worklog.userId, input.userId) : undefined,
+            reachable(await ctx.access()),
           ),
         )
         .groupBy(worklog.day, worklog.userId, user.name, project.key, issue.number, issue.title)

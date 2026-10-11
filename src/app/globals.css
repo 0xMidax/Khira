@@ -115,6 +115,30 @@ body {
   * { transition: none !important; animation: none !important; }
 }
 
+@utility card {
+  border-radius: 1rem;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(16 40 25 / 0.14);
+}
+@utility page-title {
+  font-family: var(--font-display);
+  font-size: 1.875rem;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+.app-glow {
+  background-image: radial-gradient(900px 260px at 15% -60px, color-mix(in oklab, var(--lime) 26%, transparent), transparent 70%),
+    radial-gradient(700px 240px at 95% -80px, color-mix(in oklab, var(--accent) 14%, transparent), transparent 70%);
+  background-repeat: no-repeat;
+}
+
+@keyframes tour-in {
+  from { opacity: 0; transform: translateY(4px); }
+}
+.animate-tour-in { animation: tour-in 220ms ease-out; }
+
 /* Markdown inside issues and comments */
 .prose-khira > * + * { margin-top: 0.6em; }
 .prose-khira ul { list-style: disc; padding-left: 1.4em; }

@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ISSUE_TYPES, PRIORITIES } from "@/lib/validators";
 import { useTRPC } from "@/trpc/react";
-import { AiThreadSummary, Attachments, CustomFields, GithubLinks, Links, PlanningFields, SlaBadge, SplitEpic, TimeTracking, WatchButton } from "./issue-extras";
+import { AiThreadSummary, Attachments, CustomFields, GithubLinks, Links, PlanningFields, SidebarField, SlaBadge, SplitEpic, TimeTracking, WatchButton } from "./issue-extras";
 import { MentionTextarea, RichText } from "./mention-textarea";
 import { useShell } from "./shell";
 import { Avatar, Button, cn, field, Input, IssueKey, PRIORITY_META, Select, STATUS_DOT, TYPE_META, TypeIcon } from "./ui";
@@ -61,10 +61,16 @@ export function IssueDetail({ issueKey, onDeleted }: { issueKey: string; onDelet
       { onSuccess: () => toast("Updated", { action: { label: "Undo", onClick: () => update.mutate({ id: issue.id, ...(prev as typeof patch) }) } }) },
     );
   };
+  // Turns ids in the history (status, assignee, labels) back into names.
+  const names: Record<string, string> = Object.fromEntries([
+    ...(project.data?.statuses ?? []).map((s) => [s.id, s.name]),
+    ...(project.data?.labels ?? []).map((l) => [l.id, l.name]),
+    ...(users.data ?? []).map((u) => [u.id, u.name]),
+  ]);
   const branch = `${issueKey.toLowerCase()}-${issue.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40)}`;
 
   return (
-    <div className="grid gap-8 p-5 lg:grid-cols-[minmax(0,1fr)_260px] lg:p-8">
+    <div className="grid gap-8 p-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:p-8">
       {!readOnly && <IssueShortcuts onAssignMe={() => issue.assigneeId !== me.id && set({ assigneeId: me.id })} />}
       <div className="min-w-0">
         <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px] text-muted">
@@ -103,10 +109,11 @@ export function IssueDetail({ issueKey, onDeleted }: { issueKey: string; onDelet
         <Links issueId={issue.id} readOnly={readOnly} />
         <GithubLinks issueId={issue.id} />
         <AiThreadSummary issueId={issue.id} />
-        <Comments issueId={issue.id} readOnly={readOnly} />
+        <Discussion issueId={issue.id} readOnly={readOnly} names={names} />
       </div>
 
-      <aside className="space-y-4 text-[13px] lg:border-l lg:border-line lg:pl-6">
+      <aside className="card space-y-2.5 self-start p-4 text-[13px] lg:sticky lg:top-16 [&_input]:border-transparent [&_input]:bg-transparent [&_input]:shadow-none [&_input:hover]:bg-sunken [&_select]:border-transparent [&_select]:bg-transparent [&_select]:shadow-none [&_select:hover]:bg-sunken">
+        <h2 className="mb-1 text-[11px] font-semibold tracking-[0.08em] text-muted uppercase">Details</h2>
         <Field label="Status">
           <div className="flex items-center gap-2">
             <span className={cn("size-2.5 shrink-0 rounded-full", STATUS_DOT[status.color])} aria-hidden />
@@ -156,7 +163,7 @@ export function IssueDetail({ issueKey, onDeleted }: { issueKey: string; onDelet
             ))}
           </Select>
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="contents">
           <Field label="Estimate">
             <Input
               type="number"
@@ -166,6 +173,7 @@ export function IssueDetail({ issueKey, onDeleted }: { issueKey: string; onDelet
               key={`est-${issue.estimate}`}
               disabled={readOnly}
               aria-label="Estimate in points"
+              placeholder="Add points"
               onBlur={(e) => {
                 const v = e.target.value === "" ? null : Number(e.target.value);
                 if (v !== issue.estimate) set({ estimate: v });
@@ -203,7 +211,6 @@ export function IssueDetail({ issueKey, onDeleted }: { issueKey: string; onDelet
             </Button>
           )}
         </div>
-        <Activity issueId={issue.id} />
       </aside>
     </div>
   );
@@ -226,14 +233,7 @@ function IssueShortcuts({ onAssignMe }: { onAssignMe: () => void }) {
   return null;
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="mb-1 text-[12px] text-muted">{label}</div>
-      {children}
-    </div>
-  );
-}
+const Field = SidebarField;
 
 function Title({ value, onSave, readOnly }: { value: string; onSave: (v: string) => void; readOnly: boolean }) {
   const [v, setV] = useState(value);
@@ -247,7 +247,7 @@ function Title({ value, onSave, readOnly }: { value: string; onSave: (v: string)
       onChange={(e) => setV(e.target.value.replace(/\n/g, ""))}
       onBlur={() => v.trim() && v !== value && onSave(v.trim())}
       onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), e.currentTarget.blur())}
-      className="mb-4 w-full resize-none rounded-md bg-transparent text-2xl leading-snug font-semibold [field-sizing:content] hover:bg-sunken/60 focus:bg-surface focus:outline-none"
+      className="mb-4 w-full resize-none rounded-md bg-transparent font-[family-name:var(--font-display)] text-[1.75rem] leading-tight font-bold tracking-tight [field-sizing:content] hover:bg-sunken/60 focus:bg-surface focus:outline-none"
     />
   );
 }
@@ -481,7 +481,6 @@ function Comments({ issueId, readOnly }: { issueId: string; readOnly: boolean })
 
   return (
     <section>
-      <h2 className="mb-3 font-semibold">Comments</h2>
       <ol className="mb-4 space-y-5">
         {roots.map((c) => (
           <li key={c.id}>{one(c)}</li>
@@ -516,20 +515,73 @@ const FIELD_LABEL: Record<string, string> = {
   startDate: "start date",
 };
 
-function Activity({ issueId }: { issueId: string }) {
+const VERB: Record<string, string> = {
+  created: "created this issue",
+  attached: "attached a file",
+  linked: "linked another issue",
+  overdue: "flagged it as overdue",
+  stale: "flagged it as stale",
+  released: "shipped it in a release",
+};
+
+function Discussion({ issueId, readOnly, names }: { issueId: string; readOnly: boolean; names: Record<string, string> }) {
   const trpc = useTRPC();
-  const q = useQuery(trpc.issue.activity.queryOptions({ issueId }));
+  const [tab, setTab] = useState<"comments" | "history">("comments");
+  const comments = useQuery(trpc.comment.list.queryOptions({ issueId }));
+  const history = useQuery(trpc.issue.activity.queryOptions({ issueId }));
+  const tabBtn = (id: typeof tab, label: string, n?: number) => (
+    <button
+      role="tab"
+      aria-selected={tab === id}
+      onClick={() => setTab(id)}
+      className={cn("-mb-px border-b-2 px-1 pb-2 text-[13px] font-medium transition-colors", tab === id ? "border-accent text-ink" : "border-transparent text-muted hover:text-ink")}
+    >
+      {label}
+      {!!n && <span className="ml-1.5 rounded-full bg-sunken px-1.5 py-0.5 text-[11px] text-muted">{n}</span>}
+    </button>
+  );
   return (
-    <details className="border-t border-line pt-3">
-      <summary className="cursor-pointer text-[12px] text-muted hover:text-ink">History ({q.data?.length ?? 0})</summary>
-      <ol className="mt-2 space-y-1.5 text-[12px] text-muted">
-        {q.data?.map((a) => (
-          <li key={a.id}>
-            <span className="text-ink">{a.actorName}</span>{" "}
-            {a.verb === "updated" ? `changed ${Object.keys(a.diff ?? {}).map((k) => FIELD_LABEL[k] ?? k).join(", ")}` : a.verb} · {ago(a.createdAt)}
-          </li>
-        ))}
-      </ol>
-    </details>
+    <div className="mt-8">
+      <div role="tablist" className="mb-4 flex gap-5 border-b border-line">
+        {tabBtn("comments", "Comments", comments.data?.length)}
+        {tabBtn("history", "History", history.data?.length)}
+      </div>
+      {tab === "comments" ? <Comments issueId={issueId} readOnly={readOnly} /> : <Activity rows={history.data} names={names} />}
+    </div>
+  );
+}
+
+function Activity({ rows, names }: { rows?: { id: string; verb: string; diff: unknown; createdAt: Date; actorName: string }[]; names: Record<string, string> }) {
+  if (!rows) return <p className="text-[13px] text-muted">Loading…</p>;
+  const show = (v: unknown): string => {
+    if (v === null || v === undefined || v === "") return "none";
+    if (Array.isArray(v)) return v.map(show).join(", ") || "none";
+    const s = String(v);
+    return names[s] ?? (s in PRIORITY_META ? PRIORITY_META[s as keyof typeof PRIORITY_META].label : s in TYPE_META ? TYPE_META[s as keyof typeof TYPE_META].label : s.length > 60 ? `${s.slice(0, 60)}…` : s);
+  };
+  const changes = (diff: unknown) =>
+    Object.entries((diff ?? {}) as Record<string, { from: unknown; to: unknown }>).map(([k, d]) => {
+      const label = FIELD_LABEL[k] ?? k;
+      if (k === "description") return <span key={k}>edited the description</span>;
+      if (k === "comment") return <span key={k}>commented: “{show(d.to)}”</span>;
+      if (k === "sprintId" || k === "releaseId" || k === "parentId") return <span key={k}>{d.to ? `set the ${label}` : `removed the ${label}`}</span>;
+      return (
+        <span key={k}>
+          changed {label} <span className="text-muted line-through decoration-muted/50">{show(d.from)}</span> → <span className="font-medium text-ink">{show(d.to)}</span>
+        </span>
+      );
+    });
+  if (!rows.length) return <p className="text-[13px] text-muted">No changes yet.</p>;
+  return (
+    <ol className="relative space-y-4 border-l border-line pl-5 text-[13px]">
+      {rows.map((a) => (
+        <li key={a.id} className="relative">
+          <span className="absolute -left-[25px] top-1.5 size-2 rounded-full bg-accent ring-4 ring-bg" aria-hidden />
+          <span className="font-medium">{a.actorName}</span>{" "}
+          <span className="text-ink/80">{a.verb === "updated" ? changes(a.diff).reduce<React.ReactNode[]>((acc, c, i) => (i ? [...acc, "; ", c] : [c]), []) : a.verb === "commented" ? changes(a.diff) : (VERB[a.verb] ?? a.verb)}</span>
+          <div className="text-[12px] text-muted">{new Date(a.createdAt).toLocaleString()} · {ago(a.createdAt)}</div>
+        </li>
+      ))}
+    </ol>
   );
 }

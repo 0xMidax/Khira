@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useShell } from "@/components/shell";
-import { Button, IssueKey, PRIORITY_META, Select, TYPE_META } from "@/components/ui";
+import { Button, EmptyState, IssueKey, PRIORITY_META, Select, TYPE_META } from "@/components/ui";
 import { ISSUE_TYPES, PRIORITIES } from "@/lib/validators";
 import { useTRPC } from "@/trpc/react";
 
@@ -31,14 +31,14 @@ export default function Triage() {
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 md:px-8">
-      <h1 className="text-2xl font-semibold">Triage</h1>
+      <h1 className="page-title">Triage</h1>
       <p className="mb-6 text-muted">New issues from email, Slack and people outside the team land here. Set the basics and accept them onto the board.</p>
-      {list.data?.length === 0 && <p className="rounded-lg border border-dashed border-line p-8 text-center text-muted">Nothing waiting. New issues from email and Slack will show up here.</p>}
+      {list.data?.length === 0 && <EmptyState title="Nothing waiting">New issues from email and Slack will show up here.</EmptyState>}
       <ul className="space-y-3">
         {list.data?.map((i) => {
           const s = suggestions[i.id];
           return (
-            <li key={i.id} className="rounded-lg border border-line bg-surface p-4">
+            <li key={i.id} className="card p-4">
               <div className="mb-2 flex items-start gap-2">
                 <Link href={`/i/${i.key}`} className="min-w-0 flex-1 hover:underline">
                   <IssueKey k={i.key} /> <span className="font-medium">{i.title}</span>

@@ -28,26 +28,38 @@ export default function Projects() {
   const suggestKey = (n: string) => n.replace(/[^A-Za-z0-9 ]/g, "").split(/\s+/).filter(Boolean).map((w) => w[0]).join("").toUpperCase().slice(0, 4) || n.slice(0, 3).toUpperCase();
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-8 md:px-8">
-      <h1 className="mb-6 text-2xl font-semibold">Projects</h1>
-      <ul className="mb-10 divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface empty:hidden">
-        {list.data?.map((p) => (
-          <li key={p.id}>
-            <Link href={`/p/${p.key}`} className="flex items-center gap-4 px-4 py-3 hover:bg-sunken">
-              <span className="w-14 font-mono text-[12px] text-muted">{p.key}</span>
-              <span className="flex-1">
-                <span className="block font-medium">{p.name}</span>
-                {p.description && <span className="block truncate text-[13px] text-muted">{p.description}</span>}
-              </span>
-              <span className="text-[13px] text-muted">{p.openIssues} open</span>
-            </Link>
-          </li>
-        ))}
+    <main className="mx-auto max-w-5xl px-4 py-8 md:px-8">
+      <h1 className="page-title">Projects</h1>
+      <p className="mb-6 mt-1 text-muted">Every project you can see. Private ones show only to their members.</p>
+      <ul className="mb-12 grid gap-3 empty:hidden sm:grid-cols-2 lg:grid-cols-3">
+        {list.data?.map((p) => {
+          const hue = [...p.key].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+          return (
+            <li key={p.id}>
+              <Link href={`/p/${p.key}`} className="card group flex h-full flex-col gap-3 p-4 transition hover:-translate-y-0.5 hover:border-accent/40">
+                <span className="flex items-center gap-3">
+                  <span className="grid size-10 place-items-center rounded-xl font-[family-name:var(--font-display)] text-[15px] font-bold text-white" style={{ background: `oklch(0.55 0.11 ${hue})` }}>
+                    {p.key.slice(0, 2)}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-semibold group-hover:text-accent">{p.name}</span>
+                    <span className="font-mono text-[11px] text-muted">{p.key}</span>
+                  </span>
+                  {p.visibility === "private" && <span className="rounded-full bg-sunken px-2 py-0.5 text-[11px] font-medium text-muted">Private</span>}
+                </span>
+                <span className="line-clamp-2 flex-1 text-[13px] text-muted">{p.description || "No description yet."}</span>
+                <span className="text-[12px] font-medium">
+                  <span className="text-accent">{p.openIssues}</span> <span className="text-muted">open issues</span>
+                </span>
+              </Link>
+            </li>
+          );
+        })}
       </ul>
 
       {me.role !== "guest" && (
-        <section>
-          <h2 className="mb-1 font-semibold">New project</h2>
+        <section className="max-w-3xl">
+          <h2 className="mb-1 text-xl">New project</h2>
           <p className="mb-3 text-[13px] text-muted">The key prefixes every issue number, like {key || "KHR"}-1. It can’t be changed later.</p>
           <div role="radiogroup" aria-label="How does this team work?" className="mb-3 grid gap-2 sm:grid-cols-2">
             {(

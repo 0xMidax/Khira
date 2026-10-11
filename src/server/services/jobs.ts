@@ -7,6 +7,7 @@ import { nextRun } from "@/lib/recurrence";
 import { sendMail } from "../email";
 import { getConfig } from "../integrations/config";
 import { postSlack } from "../integrations/slack";
+import { usersWithAccess } from "../access";
 import { ensureBot, BOT_ID } from "./bot";
 import { logActivity, write } from "./issues";
 import { createFromTemplate } from "./templates";
@@ -21,7 +22,8 @@ async function nudge(db: DB, a: { projectId: string; issueId?: string | null; ve
   await ensureBot(db);
   await write(db, async (tx) => {
     const act = await logActivity(tx, { actorId: BOT_ID, projectId: a.projectId, issueId: a.issueId ?? null, verb: a.verb, diff: a.diff, source: "system" });
-    if (to.length) await tx.insert(notification).values(to.map((userId) => ({ userId, activityId: act.id, reason: "watching" })));
+    const allowed = await usersWithAccess(tx, a.projectId, to); // someone who lost access to a private project isn't nudged about it
+    if (allowed.length) await tx.insert(notification).values(allowed.map((userId) => ({ userId, activityId: act.id, reason: "watching" })));
   });
 }
 

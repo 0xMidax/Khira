@@ -25,9 +25,9 @@ export function parseDuration(s: string): number | null {
 
 export function SidebarField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div>
-      <div className="mb-1 text-[12px] text-muted">{label}</div>
-      {children}
+    <div className="grid grid-cols-[84px_minmax(0,1fr)] items-start gap-2">
+      <div className="pt-2 text-[12px] font-medium text-muted">{label}</div>
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }

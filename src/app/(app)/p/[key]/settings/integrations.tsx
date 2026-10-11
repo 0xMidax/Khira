@@ -45,7 +45,7 @@ export function ProjectIntegrations({ projectId, projectKey }: { projectId: stri
       <section>
         <h2 className="mb-1 font-semibold">Chat channels</h2>
         <p className="mb-3 text-[13px] text-muted">Post this project’s updates to Slack or Discord.</p>
-        <ul className="mb-3 divide-y divide-line rounded-lg border border-line bg-surface empty:hidden">
+        <ul className="mb-3 divide-y divide-line card empty:hidden">
           {channels.data?.map((c) => (
             <li key={c.id} className="flex items-center gap-3 px-3 py-2 text-[13px]">
               <span className="font-medium capitalize">{c.kind}</span>

@@ -39,7 +39,7 @@ export default function Retro({ params }: { params: Promise<{ key: string }> }) 
           <Link href={`/p/${key}`} className="font-mono text-[12px] text-muted hover:text-ink">
             {key}
           </Link>
-          <h1 className="text-2xl font-semibold">Retrospective</h1>
+          <h1 className="page-title">Retrospective</h1>
         </div>
         <Select value={sprintId} onChange={(e) => setSprintId(e.target.value)} className="w-56" aria-label="Sprint">
           {sprints.data?.map(({ sprint: s }) => (

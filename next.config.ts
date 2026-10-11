@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // E2E builds into its own dir so it never clobbers a running `pnpm dev`.
   distDir: process.env.NEXT_DIST_DIR || ".next",
+  // Docker builds a self-contained server (node server.js) instead of needing node_modules at runtime.
+  output: process.env.NEXT_OUTPUT === "standalone" ? "standalone" : undefined,
   // PGlite resolves its WASM/data files from its own package path; bundling breaks that.
   serverExternalPackages: ["@electric-sql/pglite"],
   poweredByHeader: false,

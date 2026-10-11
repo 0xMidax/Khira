@@ -3,6 +3,7 @@ import { clsx, type ClassValue } from "clsx";
 import { Bookmark, Bug, CheckSquare, ChevronsUp, ChevronUp, Equal, ChevronDown, Layers, Minus, Square, X } from "lucide-react";
 import { forwardRef, useLayoutEffect, useRef } from "react";
 import { twMerge } from "tailwind-merge";
+import { Slice } from "./brand";
 
 export const cn = (...c: ClassValue[]) => twMerge(clsx(c));
 
@@ -131,4 +132,14 @@ export function PriorityIcon({ priority, size = 15 }: { priority: keyof typeof P
 
 export function IssueKey({ k, className }: { k: string; className?: string }) {
   return <span className={cn("font-mono text-[12px] text-muted", className)}>{k}</span>;
+}
+
+export function EmptyState({ title, children }: { title: string; children?: React.ReactNode }) {
+  return (
+    <div className="seed-texture rounded-2xl border border-dashed border-line px-6 py-12 text-center">
+      <Slice size={40} className="mx-auto mb-3 opacity-90" />
+      <p className="font-[family-name:var(--font-display)] text-lg font-semibold">{title}</p>
+      {children && <p className="mx-auto mt-1 max-w-md text-[13px] text-muted">{children}</p>}
+    </div>
+  );
 }

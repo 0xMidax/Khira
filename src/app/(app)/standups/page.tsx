@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { RichText } from "@/components/mention-textarea";
 import { useShell } from "@/components/shell";
-import { Avatar, Button, field, Input } from "@/components/ui";
+import { Avatar, Button, EmptyState, field, Input } from "@/components/ui";
 import { useTRPC } from "@/trpc/react";
 
 export default function Standups() {
@@ -24,13 +24,13 @@ export default function Standups() {
     <main className="mx-auto max-w-3xl px-4 py-8 md:px-8">
       <div className="mb-6 flex flex-wrap items-end gap-3">
         <div className="mr-auto">
-          <h1 className="text-2xl font-semibold">Standups</h1>
+          <h1 className="page-title">Standups</h1>
           <p className="text-muted">Drafted every weekday morning from what each person worked on. Edit yours before it posts to Slack.</p>
         </div>
         <Input type="date" value={day} onChange={(e) => setDay(e.target.value)} className="w-40" aria-label="Day" />
       </div>
       {me.role !== "guest" && (
-        <section className="mb-8 rounded-lg border border-line bg-surface p-4">
+        <section className="mb-8 card p-4">
           <h2 className="mb-2 font-semibold">Yours{mine?.postedAt ? " (posted)" : ""}</h2>
           <textarea value={text} onChange={(e) => setText(e.target.value)} rows={6} className={field} placeholder={"*Yesterday*\n• …\n*Today*\n• …\n*Blocked*\n• —"} aria-label="Your standup" />
           <Button variant="primary" size="sm" className="mt-2" disabled={!text.trim() || !!mine?.postedAt || save.isPending} onClick={() => save.mutate({ day, content: text })}>
@@ -51,7 +51,7 @@ export default function Standups() {
             </li>
           ))}
       </ul>
-      {list.data?.length === 0 && <p className="text-muted">No standups for this day yet.</p>}
+      {list.data?.length === 0 && <EmptyState title="No standups for this day yet" />}
     </main>
   );
 }

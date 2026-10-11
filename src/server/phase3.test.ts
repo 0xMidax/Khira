@@ -224,3 +224,41 @@ describe("GitHub branch → status automation", () => {
     expect(row.statusId).toBe(doing.id);
   });
 });
+
+describe("Integrations page connections", () => {
+  it("stores secrets encrypted, prefers them over env, and never returns them", async () => {
+    const { workspaceIntegration } = await import("./db/schema");
+    const { getConfig, clearIntegrationCache } = await import("./integrations/config");
+    process.env.GITHUB_WEBHOOK_SECRET = "from-env";
+    clearIntegrationCache();
+    expect((await getConfig("github"))?.webhookSecret).toBe("from-env"); // env fallback
+
+    const { secret } = await admin.integration.connectGithub();
+    expect((await getConfig("github"))?.webhookSecret).toBe(secret); // the app connection wins
+    const [row] = await db.select().from(workspaceIntegration);
+    expect(row.secrets).not.toContain(secret); // encrypted at rest
+
+    const conn = await admin.integration.connections();
+    expect(JSON.stringify(conn)).not.toContain(secret);
+    expect(conn.github?.source).toBe("app");
+    await expect(bob.integration.connections()).rejects.toThrow(/Admins only/);
+
+    await admin.integration.disconnect({ kind: "github" });
+    expect((await getConfig("github"))?.webhookSecret).toBe("from-env");
+    delete process.env.GITHUB_WEBHOOK_SECRET;
+    clearIntegrationCache();
+  });
+
+  it("validates email settings and only shows the inbound secret once", async () => {
+    await expect(admin.integration.connectEmail({ resendKey: "sk_wrong", from: "x <a@b.co>" })).rejects.toThrow(/start with re_/);
+    await expect(admin.integration.connectEmail({ enableInbound: true })).rejects.toThrow(/domain/);
+    const first = await admin.integration.connectEmail({ inboundDomain: "in.khira.test", enableInbound: true });
+    expect(first.inboundSecret).toMatch(/.{20,}/);
+    const again = await admin.integration.connectEmail({ inboundDomain: "in.khira.test", enableInbound: true });
+    expect(again.inboundSecret).toBeNull();
+    const rotated = await admin.integration.connectEmail({ rotateInbound: true });
+    expect(rotated.inboundSecret).not.toBe(first.inboundSecret);
+    expect((await admin.integration.status()).inboundEmail).toBe(true);
+    await admin.integration.disconnect({ kind: "email" });
+  });
+});
