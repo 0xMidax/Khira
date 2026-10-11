@@ -80,6 +80,10 @@ Everything below is switched on by adding settings to `.env` (see `.env.example`
 - **S3/R2 attachments:** `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`.
 - **Web push:** `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` (`npx web-push generate-vapid-keys`).
 - **Error tracking:** `SENTRY_DSN`.
+- **More than one address:** if people open Khira at another URL too (say a LAN IP), list it in `TRUSTED_ORIGINS`, comma-separated. Don't use `*`: it would let any website send signed-in requests on your users' behalf.
+- **Outgoing webhooks:** admins add them under Integrations; each request is signed (`X-Khira-Signature: sha256=…`, an HMAC of the body with the secret shown once when you add it).
+
+Each person can turn on two-step sign-in (an authenticator app plus backup codes) under **Your settings**. Admins invite people, change roles and deactivate accounts under **Team**; deactivating someone signs them out everywhere and unassigns their open work.
 
 ## Health and troubleshooting
 

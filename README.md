@@ -1,6 +1,6 @@
 # Khira
 
-Issue tracking for a small team: boards, backlog and sprints, custom workflows, KQL search, reports, releases, automation, AI assist, and GitHub/Slack/email integrations.
+Issue tracking for a small team: Kanban or Scrum projects, custom workflows, KQL search, dashboards and reports, releases, automation, AI assist, and GitHub/Slack/Discord/email integrations. Self-hostable, with invites, roles, private projects and two-step sign-in.
 
 **Stack:** Next.js 15 · tRPC 11 · Drizzle ORM · Postgres (Neon in prod, embedded PGlite locally) · Better Auth · Tailwind 4 · dnd-kit · Vitest · Playwright.
 
@@ -18,7 +18,18 @@ New accounts must verify their email before they can get in. Locally (without `R
 
 **Demo login:** stop `pnpm dev`, run `pnpm db:seed-demo`, start `pnpm dev` again, then sign in as `demo@khira.test` / `KhiraDemo#2026`. You get an admin account and a sample "Demo Project". The seed script refuses to run in production.
 
-Keyboard shortcuts: <kbd>C</kbd> new issue · <kbd>⌘K</kbd> or <kbd>/</kbd> search · <kbd>Esc</kbd> close panel. On the board, focus a card and press <kbd>Space</kbd> to pick it up, use the arrow keys to move it, <kbd>Space</kbd> to drop it, or <kbd>O</kbd> to open it.
+If `pnpm dev` crashes with `RuntimeError: Aborted()` from PGlite, the local database was damaged by an unclean stop (for example the dev server being killed when the machine ran out of memory). Move it aside and start fresh: `mv .pglite .pglite-broken-$(date +%F)` then `pnpm db:seed-demo`. Stop `pnpm dev` with Ctrl+C rather than killing it, and never open `.pglite` from two processes at once.
+
+Keyboard shortcuts: <kbd>C</kbd> new issue · <kbd>⌘K</kbd> or <kbd>/</kbd> search · <kbd>[</kbd> collapse or expand the sidebar · <kbd>Esc</kbd> close the open issue. On an issue: <kbd>A</kbd> assign to me, <kbd>S</kbd> status, <kbd>M</kbd> comment. On the board, focus a card and press <kbd>Space</kbd> to pick it up, use the arrow keys to move it, <kbd>Space</kbd> to drop it, or <kbd>O</kbd> to open it.
+
+## Finding your way around
+
+- **My work:** your open issues, grouped into overdue, in progress and up next.
+- **Projects:** each project page has tabs for **Summary** (counts, status and workload at a glance), **Timeline**, **Backlog** (Scrum only), **Board**, **Calendar** and **List**, plus links to Releases, Retro, Reports and (for project admins) Settings.
+- **Issues** open in a pop-up over the page you're on; <kbd>⌘</kbd>/<kbd>Ctrl</kbd>-click opens the full page in a new tab. Each issue has **Comments** and **History** tabs.
+- **Dashboards:** widgets (a number, an issue list, bars by status, person or priority, created vs resolved) built from KQL queries such as `type = bug and category != done`, across every project you can see.
+- **Integrations** (admins): GitHub, Slack, Discord, email and outgoing webhooks, all on one page. **Team** (admins): invites, roles, deactivation and a full backup download.
+- **Take the tour** in the sidebar walks a new user through all of this.
 
 ## Scripts
 
@@ -56,7 +67,7 @@ src/components/             board, issue detail, shell (sidebar, ⌘K, shortcuts
 src/app/(app)/              signed-in pages
 ```
 
-Roles: **admin** (also manages the team), **member** (creates and edits), **guest** (read-only). Every change is written to the append-only `activity` table, which drives the history tab and notifications.
+Roles: **admin** (also manages the team), **member** (creates and edits), **guest** (read-only). Projects are **open** (everyone in the workspace) or **private** (members only, each as project admin, member or viewer); people outside a private project can't see it at all, in search, dashboards, exports or notifications. Every change is written to the append-only `activity` table, which drives the history tab and notifications.
 
 ## Scheduled jobs
 
@@ -68,4 +79,4 @@ Create a token under **Your settings → API tokens**, then call `/api/v1` with 
 
 ## Integrations
 
-Admins connect Slack, Discord, email and GitHub from the **Integrations** page (secrets are stored encrypted); the env vars in `.env.example` still work as a fallback. GitHub moves issues automatically: branch created → In Progress (and assigned to the developer), PR opened → In Review, PR merged → Done, configurable per project and forward-only. Webhook URLs: GitHub `/api/webhooks/github`, Slack `/api/slack/commands`, `/api/slack/interactivity` (message shortcut callback ID `create_issue`) and `/api/slack/events`, Postmark inbound `/api/webhooks/email`.
+Admins connect Slack, Discord, email and GitHub, and add signed outgoing webhooks, from the **Integrations** page (secrets are stored encrypted); the env vars in `.env.example` still work as a fallback. GitHub moves issues automatically: branch created → In Progress (and assigned to the developer), PR opened → In Review, PR merged → Done, configurable per project and forward-only. Webhook URLs: GitHub `/api/webhooks/github`, Slack `/api/slack/commands`, `/api/slack/interactivity` (message shortcut callback ID `create_issue`) and `/api/slack/events`, Postmark inbound `/api/webhooks/email`.
