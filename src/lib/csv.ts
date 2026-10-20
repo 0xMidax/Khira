@@ -75,17 +75,26 @@ export function mapType(v: string) {
   return "task" as const;
 }
 
+/** Formats y-m-d as "YYYY-MM-DD", or null if that day does not exist (e.g. 31 Feb, month 13). */
+function calendarDate(y: number, m: number, d: number): string | null {
+  const dt = new Date(0);
+  dt.setUTCFullYear(y, m - 1, d);
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
 /** JIRA dates come as "2026-03-14", "14/Mar/26" or "14/Mar/26 3:04 PM". */
 export function parseLooseDate(v: string): string | null {
   const s = v.trim();
   if (!s) return null;
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (iso) return calendarDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
   const m = /^(\d{1,2})\/([A-Za-z]{3})\/(\d{2,4})/.exec(s);
   if (m) {
     const mon = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(m[2].toLowerCase());
     if (mon < 0) return null;
     const y = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
-    return `${y}-${String(mon + 1).padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    return calendarDate(y, mon + 1, Number(m[1]));
   }
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
