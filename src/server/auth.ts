@@ -56,7 +56,8 @@ const authentik = authentikUrl
               .from(schema.account)
               .where(and(eq(schema.account.providerId, "authentik"), eq(schema.account.accountId, p.sub)));
             if (linked) await db.update(schema.user).set({ role }).where(eq(schema.user.id, linked.userId));
-            else pendingRoles.set(p.email.toLowerCase(), role);
+            else pendingRoles.set(p.sub, role); // applied when this sign-in creates the account for this sub
+
             return { id: p.sub, email: p.email, emailVerified: p.email_verified ?? false, name: p.name ?? p.email };
           },
         },
@@ -111,12 +112,8 @@ export const auth = betterAuth({
       create: {
         before: async (u, ctx) => {
           // Authentik already checked group membership; its group decides the role.
-          if (viaAuthentik(ctx)) {
-            const role = pendingRoles.get(u.email.toLowerCase());
-            pendingRoles.delete(u.email.toLowerCase());
-            if (!role) throw new APIError("BAD_REQUEST", { message: "Your team account has no access to Khira." });
-            return { data: { ...u, role } };
-          }
+          // Authentik checked the Khira groups already; least privilege until the account hook below sets the role.
+          if (viaAuthentik(ctx)) return { data: { ...u, role: "member" } };
           const [{ n }] = await db.select({ n: count() }).from(schema.user);
           // An in-app invite (with its role) or the ALLOWED_SIGNUPS allowlist; the very first user bootstraps the admin.
           const invite = await findValidInvite(db, u.email);
@@ -128,6 +125,17 @@ export const auth = betterAuth({
         },
         after: async (u) => {
           await acceptInvite(db, u.email);
+        },
+      },
+    },
+    account: {
+      create: {
+        // A new Authentik account: its role, from the groups read in getUserInfo for exactly this sub.
+        after: async (a) => {
+          if (a.providerId !== "authentik") return;
+          const role = pendingRoles.get(a.accountId);
+          pendingRoles.delete(a.accountId);
+          if (role) await db.update(schema.user).set({ role }).where(eq(schema.user.id, a.userId));
         },
       },
     },

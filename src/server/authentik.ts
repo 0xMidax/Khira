@@ -7,6 +7,6 @@ export function khiraRole(groups: unknown): "admin" | "member" | null {
   return null;
 }
 
-// Role decided while reading the profile, handed to the user-create hook of the same sign-in.
-// Keyed by lower-case email; read once.
+// Role decided while reading the profile, handed to the account-create hook of the same sign-in.
+// Keyed by the Authentik sub (unique per person, asserted by Authentik); read once.
 export const pendingRoles = new Map<string, "admin" | "member">();
