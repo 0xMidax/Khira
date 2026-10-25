@@ -5,7 +5,7 @@ import { Button, Input } from "@/components/ui";
 import { Slice } from "@/components/brand";
 import { authClient } from "@/lib/auth-client";
 
-export function SignInForm({ providers, initialMode = "in", initialEmail = "" }: { providers: string[]; initialMode?: "in" | "up"; initialEmail?: string }) {
+export function SignInForm({ providers, sso = false, initialMode = "in", initialEmail = "" }: { providers: string[]; sso?: boolean; initialMode?: "in" | "up"; initialEmail?: string }) {
   const router = useRouter();
   const [mode, setMode] = useState<"in" | "up">(initialMode);
   const [twoFactor, setTwoFactor] = useState(false);
@@ -150,6 +150,12 @@ export function SignInForm({ providers, initialMode = "in", initialEmail = "" }:
             {mode === "in" ? "Sign in" : "Create account"}
           </Button>
         </form>
+
+        {sso && (
+          <Button className="mt-3 h-10 w-full" onClick={() => authClient.signIn.social({ provider: "authentik", callbackURL: "/" })}>
+            Continue with team account
+          </Button>
+        )}
 
         {providers.length > 0 && (
           <div className="mt-3 grid grid-cols-2 gap-2">

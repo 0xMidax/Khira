@@ -3,6 +3,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
+import { genericOAuth } from "better-auth/plugins/generic-oauth";
 import { twoFactor } from "better-auth/plugins/two-factor";
 import { count, eq } from "drizzle-orm";
 import { headers } from "next/headers";
@@ -25,6 +26,26 @@ const social = {
     },
   }),
 };
+
+// The team's single sign-on (platform repo, identity/). Access is decided there: only people in
+// the khira-member / khira-admin groups get a token for Khira at all.
+const authentik = process.env.AUTHENTIK_URL
+  ? genericOAuth({
+      config: [
+        {
+          providerId: "authentik",
+          clientId: process.env.AUTHENTIK_CLIENT_ID ?? "khira",
+          clientSecret: process.env.AUTHENTIK_CLIENT_SECRET!,
+          discoveryUrl: `${process.env.AUTHENTIK_URL}/application/o/khira/.well-known/openid-configuration`,
+          scopes: ["openid", "email", "profile"],
+          pkce: true,
+          mapProfileToUser: (p) => ({ role: (p.groups as string[] | undefined)?.includes("khira-admin") ? "admin" : "member" }),
+        },
+      ],
+    })
+  : null;
+
+const viaAuthentik = (ctx: { params?: Record<string, string | undefined> } | null) => ctx?.params?.id === "authentik";
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: "pg", schema }),
@@ -55,6 +76,10 @@ export const auth = betterAuth({
       sendMail({ to: user.email, subject: "Verify your email for Khira", text: `Open this link to verify your email and sign in:\n\n${url}` }),
   },
   socialProviders: social,
+  // Never join a sign-in to an existing user just because the emails match: Authentik reports every
+  // email as verified, so a matching email would be enough to take over that user. Existing users are
+  // linked once by an admin (platform repo, docs/identity.md); anything else starts a new user.
+  account: { accountLinking: { disableImplicitLinking: true } },
   user: {
     additionalFields: {
       role: { type: "string", input: false, defaultValue: "member" },
@@ -65,7 +90,9 @@ export const auth = betterAuth({
   databaseHooks: {
     user: {
       create: {
-        before: async (u) => {
+        before: async (u, ctx) => {
+          // Authentik already checked group membership; its group decides the role.
+          if (viaAuthentik(ctx)) return { data: { ...u, role: u.role === "admin" ? "admin" : "member" } };
           const [{ n }] = await db.select({ n: count() }).from(schema.user);
           // An in-app invite (with its role) or the ALLOWED_SIGNUPS allowlist; the very first user bootstraps the admin.
           const invite = await findValidInvite(db, u.email);
@@ -90,7 +117,7 @@ export const auth = betterAuth({
       },
     },
   },
-  plugins: [twoFactor({ issuer: "Khira" }), nextCookies()],
+  plugins: [twoFactor({ issuer: "Khira" }), ...(authentik ? [authentik] : []), nextCookies()],
 });
 
 export type SessionUser = typeof auth.$Infer.Session.user;
@@ -106,3 +133,4 @@ export async function getMember() {
 }
 
 export const socialProviders = Object.keys(social);
+export const ssoEnabled = authentik !== null;
