@@ -68,6 +68,8 @@ describe("POST /api/mcp", () => {
 
     expect((await post({ jsonrpc: "2.0", id: 1, method: "ping" }, "Bearer khira_wrong")).status).toBe(401);
     expect((await post({ jsonrpc: "2.0", method: "notifications/initialized" })).status).toBe(202);
+    expect((await post([])).status).toBe(400);
+    expect((await post(Array.from({ length: 21 }, (_, i) => ({ jsonrpc: "2.0", id: i, method: "ping" })))).status).toBe(400);
     const batch = await (await post([{ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "my_issues", arguments: {} } }])).json();
     expect(batch[0].result.serverInfo.name).toBe("khira");
     expect(JSON.parse(batch[1].result.content[0].text)[0].key).toBe("AGT-1");
