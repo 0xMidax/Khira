@@ -5,6 +5,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { ProjectIntegrations } from "@/app/(app)/p/[key]/settings/integrations";
 import { DiscordMark, GithubMark, SlackMark } from "@/components/brand";
+import { AgentConnect } from "@/components/agent-connect";
 import { useShell } from "@/components/shell";
 import { OutgoingWebhooks, ServerFeatures } from "@/components/workspace-extras";
 import { Button, cn, Input, Select } from "@/components/ui";
@@ -285,6 +286,10 @@ export default function Integrations() {
             </Button>
           )}
         </Card>
+      </div>
+
+      <div className="mt-10">
+        <AgentConnect large />
       </div>
 
       <section className="mt-10">

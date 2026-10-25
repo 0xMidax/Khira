@@ -4,6 +4,7 @@ import { Copy, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useShell } from "@/components/shell";
+import { AgentConnect } from "@/components/agent-connect";
 import { TwoFactorSection } from "@/components/two-factor";
 import { Button, Input, Select } from "@/components/ui";
 import { useTRPC } from "@/trpc/react";
@@ -99,10 +100,12 @@ export default function Profile() {
 
       <TwoFactorSection />
 
+      <AgentConnect />
+
       <section className="space-y-3">
         <h2 className="font-semibold">API tokens</h2>
         <p className="text-[13px] text-muted">
-          For scripts and CI. Send as <code className="font-mono">Authorization: Bearer …</code> to <code className="font-mono">/api/v1</code>. Tokens act as you.
+          For scripts, CI and coding agents. Send as <code className="font-mono">Authorization: Bearer …</code> to <code className="font-mono">/api/v1</code> or <code className="font-mono">/api/mcp</code>. Tokens act as you.
         </p>
         {newToken && (
           <div className="flex items-center gap-2 rounded-md border border-accent bg-accent-soft p-2 text-[13px]">

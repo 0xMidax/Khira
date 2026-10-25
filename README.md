@@ -77,6 +77,15 @@ Roles: **admin** (also manages the team), **member** (creates and edits), **gues
 
 Create a token under **Your settings → API tokens**, then call `/api/v1` with `Authorization: Bearer khira_…`: `GET /projects`, `GET /issues?kql=…`, `GET|PATCH /issues/KEY-1`, `POST /issues`, `POST /issues/KEY-1/comments`. 300 requests/minute per token.
 
-## Integrations
+## Coding agents (MCP)
+
+Claude Code, Codex, Cursor and other MCP clients can work with Khira directly: find your issues, read the details, move them through the workflow, create issues and comment with what they changed. Open **Your settings → Connect a coding agent**, pick your tool, click **Create a token for this** and paste the snippet. For Claude Code that is:
+
+```bash
+claude mcp add --transport http khira https://<your-khira>/api/mcp --header "Authorization: Bearer khira_…"
+```
+
+The endpoint is `POST /api/mcp` (MCP Streamable HTTP, stateless JSON replies). Tools: `list_projects`, `my_issues`, `search_issues` (KQL), `get_issue`, `create_issue`, `update_issue` (status, assignee, priority, title, description) and `add_comment`. The agent acts as the token's owner, with the same permissions and the same 300 requests/minute limit as the REST API. Revoke the token under API tokens to cut it off.
+
 
 Admins connect Slack, Discord, email and GitHub, and add signed outgoing webhooks, from the **Integrations** page (secrets are stored encrypted); the env vars in `.env.example` still work as a fallback. GitHub moves issues automatically: branch created → In Progress (and assigned to the developer), PR opened → In Review, PR merged → Done, configurable per project and forward-only. Webhook URLs: GitHub `/api/webhooks/github`, Slack `/api/slack/commands`, `/api/slack/interactivity` (message shortcut callback ID `create_issue`) and `/api/slack/events`, Postmark inbound `/api/webhooks/email`.
