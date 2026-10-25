@@ -1,9 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
-import { and, eq, isNull } from "drizzle-orm";
-import { sha256 } from "@/lib/crypto";
+import { authenticate } from "@/server/api-auth";
 import { db } from "@/server/db";
-import { apiToken, user } from "@/server/db/schema";
 import { hit } from "@/server/ratelimit";
 import { createCaller } from "@/server/root";
 
@@ -18,19 +16,6 @@ import { createCaller } from "@/server/root";
  *   PATCH  /api/v1/issues/KHR-12          { title?, description?, priority?, status?, assigneeId? }
  *   POST   /api/v1/issues/KHR-12/comments { body }
  */
-async function authenticate(req: Request) {
-  const raw = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
-  if (!raw.startsWith("khira_")) return null;
-  const [row] = await db
-    .select({ tokenId: apiToken.id, id: user.id, name: user.name, email: user.email, role: user.role, emailVerified: user.emailVerified })
-    .from(apiToken)
-    .innerJoin(user, eq(user.id, apiToken.userId))
-    .where(and(eq(apiToken.hash, sha256(raw)), isNull(apiToken.revokedAt), isNull(user.deactivatedAt)));
-  if (!row) return null;
-  void db.update(apiToken).set({ lastUsedAt: new Date() }).where(eq(apiToken.id, row.tokenId)).catch(() => {});
-  return row;
-}
-
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 
 async function handle(req: Request, path: string[]) {
