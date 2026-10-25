@@ -5,11 +5,12 @@ import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { genericOAuth } from "better-auth/plugins/generic-oauth";
 import { twoFactor } from "better-auth/plugins/two-factor";
-import { count, eq } from "drizzle-orm";
+import { and, count, eq } from "drizzle-orm";
 import { headers } from "next/headers";
 import { isSignupAllowed } from "@/lib/signup";
 import { db, schema } from "./db";
 import { sendMail } from "./email";
+import { khiraRole, pendingRoles } from "./authentik";
 import { acceptInvite, findValidInvite } from "./services/invites";
 
 const social = {
@@ -27,19 +28,37 @@ const social = {
   }),
 };
 
-// The team's single sign-on (platform repo, identity/). Access is decided there: only people in
-// the khira-member / khira-admin groups get a token for Khira at all.
-const authentik = process.env.AUTHENTIK_URL
+// The team's single sign-on (platform repo, identity/). Authentik only issues Khira tokens to people in
+// khira-member / khira-admin, and Khira checks the groups again itself on every sign-in (khiraRole).
+const authentikUrl = process.env.AUTHENTIK_URL;
+const authentik = authentikUrl
   ? genericOAuth({
       config: [
         {
           providerId: "authentik",
           clientId: process.env.AUTHENTIK_CLIENT_ID ?? "khira",
           clientSecret: process.env.AUTHENTIK_CLIENT_SECRET!,
-          discoveryUrl: `${process.env.AUTHENTIK_URL}/application/o/khira/.well-known/openid-configuration`,
+          discoveryUrl: `${authentikUrl}/application/o/khira/.well-known/openid-configuration`,
           scopes: ["openid", "email", "profile"],
           pkce: true,
-          mapProfileToUser: (p) => ({ role: (p.groups as string[] | undefined)?.includes("khira-admin") ? "admin" : "member" }),
+          // Read the profile ourselves so the groups claim is checked on every sign-in, and the role follows
+          // Authentik: returning null refuses the sign-in.
+          getUserInfo: async (tokens) => {
+            const res = await fetch(`${authentikUrl}/application/o/userinfo/`, {
+              headers: { Authorization: `Bearer ${tokens.accessToken}` },
+            });
+            if (!res.ok) return null;
+            const p = (await res.json()) as { sub?: string; email?: string; email_verified?: boolean; name?: string; groups?: unknown };
+            const role = khiraRole(p.groups);
+            if (!role || !p.sub || !p.email) return null;
+            const [linked] = await db
+              .select({ userId: schema.account.userId })
+              .from(schema.account)
+              .where(and(eq(schema.account.providerId, "authentik"), eq(schema.account.accountId, p.sub)));
+            if (linked) await db.update(schema.user).set({ role }).where(eq(schema.user.id, linked.userId));
+            else pendingRoles.set(p.email.toLowerCase(), role);
+            return { id: p.sub, email: p.email, emailVerified: p.email_verified ?? false, name: p.name ?? p.email };
+          },
         },
       ],
     })
@@ -92,7 +111,12 @@ export const auth = betterAuth({
       create: {
         before: async (u, ctx) => {
           // Authentik already checked group membership; its group decides the role.
-          if (viaAuthentik(ctx)) return { data: { ...u, role: u.role === "admin" ? "admin" : "member" } };
+          if (viaAuthentik(ctx)) {
+            const role = pendingRoles.get(u.email.toLowerCase());
+            pendingRoles.delete(u.email.toLowerCase());
+            if (!role) throw new APIError("BAD_REQUEST", { message: "Your team account has no access to Khira." });
+            return { data: { ...u, role } };
+          }
           const [{ n }] = await db.select({ n: count() }).from(schema.user);
           // An in-app invite (with its role) or the ALLOWED_SIGNUPS allowlist; the very first user bootstraps the admin.
           const invite = await findValidInvite(db, u.email);
