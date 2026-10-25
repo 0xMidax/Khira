@@ -57,6 +57,8 @@ Migrations must stay backward-compatible (expand first, contract in a later depl
 
 Optional: set `GOOGLE_CLIENT_ID/SECRET` and/or `GITHUB_CLIENT_ID/SECRET` to show social sign-in buttons. The OAuth callback URL is `<BETTER_AUTH_URL>/api/auth/callback/<google|github>`.
 
+Team single sign-on: set `AUTHENTIK_URL` and `AUTHENTIK_CLIENT_SECRET` to show "Continue with team account" (Authentik setup and linking existing users: `platform` repo, `docs/identity.md`). Accounts are never joined by matching email; an admin links existing users once.
+
 ## Layout
 
 ```
