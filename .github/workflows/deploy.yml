@@ -1,0 +1,41 @@
+# Deploy khira.0xmidax.com to the Oracle VM. Manual, from main only:
+#   Actions -> deploy -> Run workflow
+# Runs infra's scripts/oracle-deploy.sh khira on the org's self-hosted runner (docker compose builds on
+# the VM). Secrets, deploy access only: ORACLE_SSH_KEY, GH_READ_TOKEN (fine-grained PAT, Contents: read
+# on 0xMidax/infra). Khira's .env stays on the VM (the script never ships it).
+name: deploy
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-oracle
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: Khira, persist-credentials: false }
+      - uses: actions/checkout@v4
+        with: { repository: 0xMidax/infra, ref: staging, token: "${{ secrets.GH_READ_TOKEN }}", path: infra, persist-credentials: false }
+
+      # The runner keeps files between jobs: the key lives in this job's temp dir and is removed at the end.
+      - name: SSH key
+        env: { KEY: "${{ secrets.ORACLE_SSH_KEY }}" }
+        run: |
+          umask 077
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/deploy_key"
+          echo "SSH_KEY_PATH=$RUNNER_TEMP/deploy_key" >> "$GITHUB_ENV"
+
+      - name: Deploy
+        run: infra/scripts/oracle-deploy.sh khira
+
+      - name: Remove the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/deploy_key"
