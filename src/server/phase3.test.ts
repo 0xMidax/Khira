@@ -55,6 +55,11 @@ describe("pure helpers", () => {
     expect(toCsv(["a", "b"], [["=HYPERLINK(1)", 'x"y']])).toBe('a,b\r\n\'=HYPERLINK(1),"x""y"');
     expect(mapPriority("Highest")).toBe("urgent");
     expect(parseLooseDate("14/Mar/26 3:04 PM")).toBe("2026-03-14");
+    expect(parseLooseDate("31/Feb/26")).toBeNull();
+    expect(parseLooseDate("32/Jan/26")).toBeNull();
+    expect(parseLooseDate("2026-13-45")).toBeNull();
+    expect(parseLooseDate("29/Feb/28")).toBe("2028-02-29"); // valid leap day
+    expect(parseLooseDate("2026-03-14")).toBe("2026-03-14");
   });
   it("builds similarity queries without punctuation tricks", () => {
     expect(similarityQuery("The login page is broken on Safari!")).toBe("login | page | broken | safari");
