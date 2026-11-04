@@ -75,16 +75,27 @@ export function mapType(v: string) {
   return "task" as const;
 }
 
+function isValidYmd(y: number, m: number, d: number): boolean {
+  // m is 0-based (0 = January)
+  const check = new Date(Date.UTC(y, m, d));
+  return check.getUTCFullYear() === y && check.getUTCMonth() === m && check.getUTCDate() === d;
+}
+
 /** JIRA dates come as "2026-03-14", "14/Mar/26" or "14/Mar/26 3:04 PM". */
 export function parseLooseDate(v: string): string | null {
   const s = v.trim();
   if (!s) return null;
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (iso) {
+    if (!isValidYmd(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]))) return null;
+    return s.slice(0, 10);
+  }
   const m = /^(\d{1,2})\/([A-Za-z]{3})\/(\d{2,4})/.exec(s);
   if (m) {
     const mon = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(m[2].toLowerCase());
     if (mon < 0) return null;
     const y = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
+    if (!isValidYmd(y, mon, Number(m[1]))) return null;
     return `${y}-${String(mon + 1).padStart(2, "0")}-${m[1].padStart(2, "0")}`;
   }
   const d = new Date(s);
