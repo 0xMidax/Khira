@@ -32,9 +32,10 @@ export function parseCsv(text: string): string[][] {
 
 const needsQuote = /[",\r\n]/;
 // Leading = + - @ would run as formulas in spreadsheet apps (CSV injection).
+// Only text can carry a formula: a real number such as -5 is written as-is so it round-trips.
 const escapeCell = (v: unknown) => {
   let s = v == null ? "" : v instanceof Date ? v.toISOString() : String(v);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return needsQuote.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
