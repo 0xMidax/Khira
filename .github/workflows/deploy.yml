@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
         with: { path: Khira, persist-credentials: false }
       - uses: actions/checkout@v4
-        with: { repository: 0xMidax/infra, ref: staging, token: "${{ secrets.GH_READ_TOKEN }}", path: infra, persist-credentials: false }
+        with: { repository: 0xMidax/infra, ref: main, token: "${{ secrets.GH_READ_TOKEN }}", path: infra, persist-credentials: false }
 
       # The runner keeps files between jobs: the key lives in this job's temp dir and is removed at the end.
       - name: SSH key
